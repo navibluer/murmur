@@ -24,6 +24,7 @@ public actor Pipeline {
     private var seen: Set<String> = []
     private var seenOrder: [String] = []
     private let seenLimit = 1000
+    private var tail: Task<Void, Never>?
 
     public init(config: Config, line: LineAPI, transcriber: Transcriber, analyzer: Analyzer,
                 now: @escaping @Sendable () -> ContinuousClock.Instant = { .now },
@@ -44,6 +45,17 @@ public actor Pipeline {
         }
         guard markSeen(event.webhookEventId) else { return }
 
+        // 串行佇列：前一個事件處理完才開始下一個（actor 在 await 時可重入，故以 Task 串接）
+        let previous = tail
+        let work = Task { [self] in
+            await previous?.value
+            await process(event, userId: userId, receivedAt: receivedAt)
+        }
+        tail = work
+        await work.value
+    }
+
+    private func process(_ event: WebhookEvent, userId: String, receivedAt: ContinuousClock.Instant) async {
         let token = event.replyToken
         func deliver(_ texts: [String]) async {
             await send(texts, userId: userId, replyToken: token, receivedAt: receivedAt)

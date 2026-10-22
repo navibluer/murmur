@@ -44,7 +44,14 @@ final class FakeLine: LineAPI, @unchecked Sendable {
 final class FakeTranscriber: Transcriber, @unchecked Sendable {
     let files = Box<[URL]>([])
     var result = "你好"
+    var delay: Duration?
+    let inFlight = Box(0)
+    let maxInFlight = Box(0)
     func transcribe(fileURL: URL) async throws -> String {
+        inFlight.value += 1
+        maxInFlight.value = max(maxInFlight.value, inFlight.value)
+        defer { inFlight.value -= 1 }
+        if let delay { try await Task.sleep(for: delay) }
         files.value.append(fileURL)
         #expect(FileManager.default.fileExists(atPath: fileURL.path))
         return result
@@ -83,6 +90,30 @@ struct Boom: Error {}
                msg: String = #"{"id":"m1","type":"audio","duration":1000,"contentProvider":{"type":"line"}}"#) throws -> WebhookEvent {
         let json = #"{"type":"\#(type)","webhookEventId":"\#(id)","replyToken":"rt","source":{"type":"\#(source)","userId":"\#(user)"},"deliveryContext":{"isRedelivery":false},"message":\#(msg)}"#
         return try JSONDecoder().decode(WebhookEvent.self, from: Data(json.utf8))
+    }
+
+    @Test func serialProcessing() async throws {
+        tr.delay = .milliseconds(50)
+        let p = make()
+        let e1 = try event(id: "a", msg: #"{"id":"m1","type":"audio","contentProvider":{"type":"line"}}"#)
+        let e2 = try event(id: "b", msg: #"{"id":"m2","type":"audio","contentProvider":{"type":"line"}}"#)
+        let s = start
+        await withTaskGroup(of: Void.self) { g in
+            g.addTask { await p.handle(e1, receivedAt: s) }
+            g.addTask { await p.handle(e2, receivedAt: s) }
+        }
+        #expect(tr.maxInFlight.value == 1)
+        #expect(tr.files.value.count == 2)
+        #expect(line.replies.value.count == 2)
+    }
+
+    @Test func noReplyTokenPushes() async throws {
+        let json = #"{"type":"message","webhookEventId":"n1","source":{"type":"user","userId":"U1"},"deliveryContext":{"isRedelivery":false},"message":{"id":"m1","type":"audio","contentProvider":{"type":"line"}}}"#
+        let e = try JSONDecoder().decode(WebhookEvent.self, from: Data(json.utf8))
+        let p = make()
+        await p.handle(e, receivedAt: start)
+        #expect(line.replies.value.isEmpty)
+        #expect(line.pushes.value.count == 1 && line.pushes.value[0].count == 4)
     }
 
     @Test func policy() {
