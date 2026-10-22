@@ -92,6 +92,16 @@ struct Boom: Error {}
         return try JSONDecoder().decode(WebhookEvent.self, from: Data(json.utf8))
     }
 
+    @Test func staleAudioClearedOnInit() throws {
+        let sub = dir.appendingPathComponent("murmur-audio")
+        try FileManager.default.createDirectory(at: sub, withIntermediateDirectories: true)
+        let stale = sub.appendingPathComponent("old.m4a")
+        try Data("x".utf8).write(to: stale)
+        _ = make()
+        #expect(!FileManager.default.fileExists(atPath: stale.path))
+        #expect(FileManager.default.fileExists(atPath: sub.path))
+    }
+
     @Test func serialProcessing() async throws {
         tr.delay = .milliseconds(50)
         let p = make()

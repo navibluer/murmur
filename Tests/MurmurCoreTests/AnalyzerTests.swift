@@ -46,6 +46,21 @@ final class StubProtocol: URLProtocol, @unchecked Sendable {
         return try! JSONSerialization.data(withJSONObject: obj)
     }
 
+    @Test func unescapesLiteralBackslashSequences() async throws {
+        StubProtocol.handler = { _, _ in
+            (200, self.toolUseResponse([
+                "polished": "第一段\\n\\n第二段", "summary": "- a\\n- b\\r\\n- c", "sentiment": "好\\t棒\\n真的",
+                "replies": ["行一\\n行二"],
+            ]))
+        }
+        let a = try await makeAnalyzer().analyze(transcript: "原文")
+        #expect(a.summary == "- a\n- b\n- c")
+        #expect(a.polished == "第一段\n\n第二段")
+        #expect(a.sentiment == "好\t棒\n真的")
+        #expect(a.replies == ["行一\n行二"])
+        for f in [a.polished, a.summary, a.sentiment] + a.replies { #expect(!f.contains("\\")) }
+    }
+
     @Test func sendsExpectedRequestAndParsesAndConvertsToTraditional() async throws {
         StubProtocol.handler = { _, _ in
             (200, self.toolUseResponse([

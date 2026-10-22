@@ -34,7 +34,11 @@ public actor Pipeline {
         self.transcriber = transcriber
         self.analyzer = analyzer
         self.now = now
-        self.tempDir = tempDir
+        // 專屬子目錄：啟動時整個清掉，避免上次程序中斷殘留的音檔
+        let audioDir = tempDir.appendingPathComponent("murmur-audio", isDirectory: true)
+        try? FileManager.default.removeItem(at: audioDir)
+        try? FileManager.default.createDirectory(at: audioDir, withIntermediateDirectories: true)
+        self.tempDir = audioDir
     }
 
     public func handle(_ event: WebhookEvent, receivedAt: ContinuousClock.Instant) async {

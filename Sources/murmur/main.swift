@@ -3,6 +3,8 @@ import MurmurCore
 
 func err(_ s: String) { FileHandle.standardError.write(Data((s + "\n").utf8)) }
 
+setvbuf(stdout, nil, _IOLBF, 0)
+
 let args = CommandLine.arguments
 
 if args.count >= 2, args[1] == "serve" {

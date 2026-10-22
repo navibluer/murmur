@@ -48,6 +48,7 @@ public struct ClaudeAnalyzer: Analyzer {
         - polished：潤飾後的逐字稿。修正同音錯字與辨識錯誤、補上標點、分段、去除口語贅詞，但不改變原意、不增刪內容。
         - summary：重點整理，以條列呈現（每行以「- 」開頭）。
         - sentiment：情緒分析，包含整體情緒、語氣，以及需要注意的地方。
+        所有欄位需要換行時請直接輸出真正的換行字元，不要輸出跳脫序列（例如反斜線加 n）。
         - replies：2 到 3 則回覆建議（字串陣列），口吻自然，可直接傳送給對方。
         只依語音內容判斷，不要臆測沒有出現的脈絡。
         """
@@ -59,9 +60,9 @@ public struct ClaudeAnalyzer: Analyzer {
         "input_schema": [
             "type": "object",
             "properties": [
-                "polished": ["type": "string", "description": "潤飾後的逐字稿（繁體中文）"],
-                "summary": ["type": "string", "description": "條列式重點整理（繁體中文）"],
-                "sentiment": ["type": "string", "description": "情緒分析（繁體中文）"],
+                "polished": ["type": "string", "description": "潤飾後的逐字稿（繁體中文）；換行請用真正的換行字元，不要輸出跳脫序列"],
+                "summary": ["type": "string", "description": "條列式重點整理（繁體中文）；換行請用真正的換行字元，不要輸出跳脫序列"],
+                "sentiment": ["type": "string", "description": "情緒分析（繁體中文）；換行請用真正的換行字元，不要輸出跳脫序列"],
                 "replies": ["type": "array", "items": ["type": "string"], "description": "2～3 則回覆建議（繁體中文）"],
             ],
             "required": ["polished", "summary", "sentiment", "replies"],
@@ -108,8 +109,16 @@ public struct ClaudeAnalyzer: Analyzer {
             let replies = input["replies"] as? [String]
         else { throw AnalyzerError.malformedResponse }
 
+        func clean(_ s: String) -> String { Hant.convert(Self.unescape(s)) }
         return Analysis(
-            polished: Hant.convert(polished), summary: Hant.convert(summary),
-            sentiment: Hant.convert(sentiment), replies: replies.map(Hant.convert))
+            polished: clean(polished), summary: clean(summary),
+            sentiment: clean(sentiment), replies: replies.map(clean))
+    }
+
+    /// 模型偶爾會雙重跳脫，解碼後留下字面的反斜線加字母；還原成真正的字元。
+    static func unescape(_ s: String) -> String {
+        s.replacingOccurrences(of: "\\r\\n", with: "\n")
+            .replacingOccurrences(of: "\\n", with: "\n")
+            .replacingOccurrences(of: "\\t", with: "\t")
     }
 }

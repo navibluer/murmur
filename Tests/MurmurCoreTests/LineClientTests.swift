@@ -73,6 +73,18 @@ final class LineStubProtocol: URLProtocol, @unchecked Sendable {
         #expect(LineStubProtocol.requests.contains { $0.0.url?.absoluteString == "https://api-data.line.me/v2/bot/message/M1/content/transcoding" })
     }
 
+    @Test func succeededAfterDeadlineStillDownloads() async throws {
+        let c = makeClient(pollLimit: .zero)
+        nonisolated(unsafe) var contentCalls = 0
+        LineStubProtocol.handler = { req, _ in
+            if req.url!.path.hasSuffix("/transcoding") { return (200, [:], Data("{\"status\":\"succeeded\"}".utf8)) }
+            contentCalls += 1
+            return contentCalls == 1 ? (202, [:], Data()) : (200, ["Content-Type": "audio/m4a"], Data([7]))
+        }
+        let r = try await c.downloadContent(messageId: "M1")
+        #expect(r.data == Data([7]))
+    }
+
     @Test func transcodingFailedThrows() async {
         let c = makeClient()
         LineStubProtocol.handler = { req, _ in

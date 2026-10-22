@@ -89,7 +89,6 @@ public struct LineClient: LineAPI {
                 if clock.now >= deadline { throw LineError.transcodingTimeout }
                 try await Task.sleep(for: pollInterval)
             }
-            if clock.now >= deadline { throw LineError.transcodingTimeout }
         }
     }
 }
