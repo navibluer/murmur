@@ -33,4 +33,13 @@ import Testing
         #expect(c.port == 47821)
         #expect(c.claudeModel == "claude-sonnet-5-5")
     }
+
+    @Test func workspaceID() throws {
+        #expect(try Config.load(env: base).anthropicWorkspaceID == nil)
+        var env = base
+        env["ANTHROPIC_WORKSPACE_ID"] = ""
+        #expect(try Config.load(env: env).anthropicWorkspaceID == nil)
+        env["ANTHROPIC_WORKSPACE_ID"] = "wrkspc_1"
+        #expect(try Config.load(env: env).anthropicWorkspaceID == "wrkspc_1")
+    }
 }

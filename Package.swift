@@ -4,8 +4,11 @@ import PackageDescription
 let package = Package(
     name: "murmur",
     platforms: [.macOS(.v26)],
+    dependencies: [
+        .package(url: "https://github.com/hummingbird-project/hummingbird.git", from: "2.28.0")
+    ],
     targets: [
-        .target(name: "MurmurCore"),
+        .target(name: "MurmurCore", dependencies: [.product(name: "Hummingbird", package: "hummingbird")]),
         .executableTarget(
             name: "murmur",
             dependencies: ["MurmurCore"],
@@ -19,6 +22,8 @@ let package = Package(
                 ])
             ]
         ),
-        .testTarget(name: "MurmurCoreTests", dependencies: ["MurmurCore"]),
+        .testTarget(
+            name: "MurmurCoreTests",
+            dependencies: ["MurmurCore", .product(name: "HummingbirdTesting", package: "hummingbird")]),
     ]
 )

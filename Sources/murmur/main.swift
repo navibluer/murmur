@@ -4,8 +4,34 @@ import MurmurCore
 func err(_ s: String) { FileHandle.standardError.write(Data((s + "\n").utf8)) }
 
 let args = CommandLine.arguments
+
+if args.count >= 2, args[1] == "serve" {
+    var env = ProcessInfo.processInfo.environment
+    if let raw = try? String(contentsOfFile: ".env", encoding: .utf8) {
+        env = DotEnv.parse(raw).merging(env) { _, processEnv in processEnv }
+    }
+    do {
+        let config = try Config.load(env: env)
+        if config.allowedUserIDs.isEmpty {
+            err("警告：ALLOWED_USER_IDS 為空，所有訊息都會被拒絕；請傳訊給 bot，從 log 的「未授權的 userId」複製")
+        }
+        let pipeline = Pipeline(
+            config: config,
+            line: LineClient(accessToken: config.lineChannelAccessToken),
+            transcriber: AppleTranscriber(),
+            analyzer: ClaudeAnalyzer(
+                apiKey: config.anthropicAPIKey, model: config.claudeModel, workspaceID: config.anthropicWorkspaceID))
+        err("murmur 監聽 127.0.0.1:\(config.port)（POST /webhook、GET /health）")
+        try await buildApplication(config: config, pipeline: pipeline).runService()
+    } catch {
+        err("錯誤：\(error)")
+        exit(1)
+    }
+    exit(0)
+}
+
 guard args.count >= 3, args[1] == "transcribe" || args[1] == "analyze" else {
-    err("用法：murmur transcribe <音檔> | murmur analyze <音檔>")
+    err("用法：murmur transcribe <音檔> | murmur analyze <音檔> | murmur serve")
     exit(64)
 }
 let url = URL(fileURLWithPath: (args[2] as NSString).expandingTildeInPath)

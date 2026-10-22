@@ -29,10 +29,12 @@ public struct Config: Sendable {
     public var allowedUserIDs: Set<String>
     public var claudeModel: String
     public var port: Int
+    public var anthropicWorkspaceID: String?
 
     public init(
         lineChannelSecret: String, lineChannelAccessToken: String, anthropicAPIKey: String,
-        allowedUserIDs: Set<String> = [], claudeModel: String = "claude-sonnet-5-5", port: Int = 47821
+        allowedUserIDs: Set<String> = [], claudeModel: String = "claude-sonnet-5-5", port: Int = 47821,
+        anthropicWorkspaceID: String? = nil
     ) {
         self.lineChannelSecret = lineChannelSecret
         self.lineChannelAccessToken = lineChannelAccessToken
@@ -40,6 +42,7 @@ public struct Config: Sendable {
         self.allowedUserIDs = allowedUserIDs
         self.claudeModel = claudeModel
         self.port = port
+        self.anthropicWorkspaceID = anthropicWorkspaceID
     }
 
     public static func load(env: [String: String]) throws -> Config {
@@ -57,6 +60,7 @@ public struct Config: Sendable {
             lineChannelSecret: try required("LINE_CHANNEL_SECRET"),
             lineChannelAccessToken: try required("LINE_CHANNEL_ACCESS_TOKEN"),
             anthropicAPIKey: try required("ANTHROPIC_API_KEY"),
-            allowedUserIDs: Set(ids), claudeModel: model, port: port)
+            allowedUserIDs: Set(ids), claudeModel: model, port: port,
+            anthropicWorkspaceID: env["ANTHROPIC_WORKSPACE_ID"].flatMap { $0.isEmpty ? nil : $0 })
     }
 }
