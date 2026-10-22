@@ -1,19 +1,41 @@
 import Foundation
 import MurmurCore
 
+func err(_ s: String) { FileHandle.standardError.write(Data((s + "\n").utf8)) }
+
 let args = CommandLine.arguments
-guard args.count >= 3, args[1] == "transcribe" else {
-    FileHandle.standardError.write(Data("用法：murmur transcribe <音檔>\n".utf8))
+guard args.count >= 3, args[1] == "transcribe" || args[1] == "analyze" else {
+    err("用法：murmur transcribe <音檔> | murmur analyze <音檔>")
     exit(64)
 }
 let url = URL(fileURLWithPath: (args[2] as NSString).expandingTildeInPath)
 let start = Date()
 do {
     let text = try await AppleTranscriber().transcribe(fileURL: url)
-    print(text)
-    let elapsed = Date().timeIntervalSince(start)
-    FileHandle.standardError.write(Data(String(format: "transcribe: %.1fs\n", elapsed).utf8))
+    let t1 = Date().timeIntervalSince(start)
+    if args[1] == "transcribe" {
+        print(text)
+        err(String(format: "transcribe: %.1fs", t1))
+    } else {
+        var env = ProcessInfo.processInfo.environment
+        if let raw = try? String(contentsOfFile: ".env", encoding: .utf8) {
+            env = DotEnv.parse(raw).merging(env) { _, processEnv in processEnv }
+        }
+        guard let key = env["ANTHROPIC_API_KEY"], !key.isEmpty else {
+            err("錯誤：缺少 ANTHROPIC_API_KEY")
+            exit(78)
+        }
+        let model = env["CLAUDE_MODEL"].flatMap { $0.isEmpty ? nil : $0 } ?? "claude-sonnet-5-5"
+        let t2Start = Date()
+        let analysis = try await ClaudeAnalyzer(apiKey: key, model: model, workspaceID: env["ANTHROPIC_WORKSPACE_ID"]).analyze(transcript: text)
+        let t2 = Date().timeIntervalSince(t2Start)
+        for m in MessageFormatter.format(analysis) {
+            print(m)
+            print("\n-----\n")
+        }
+        err(String(format: "transcribe: %.1fs\nanalyze: %.1fs\ntotal: %.1fs", t1, t2, Date().timeIntervalSince(start)))
+    }
 } catch {
-    FileHandle.standardError.write(Data("錯誤：\(error)\n".utf8))
+    err("錯誤：\(error)")
     exit(1)
 }
