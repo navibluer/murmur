@@ -9,16 +9,17 @@ import Testing
     @Test func producesFourMessagesInOrder() {
         let m = MessageFormatter.format(sample)
         #expect(m.count == 4)
-        #expect(m[0].hasPrefix("📌 重點整理"))
-        #expect(m[1].hasPrefix("💭 情緒分析"))
-        #expect(m[2].hasPrefix("💬 回覆建議"))
-        #expect(m[3].hasPrefix("📝 潤飾逐字稿"))
+        let d = "━━━━━━━━━━"
+        #expect(m[0] == "🧭【重點整理】\n\(d)\n- 重點一\n- 重點二")
+        #expect(m[1] == "🎙️【逐字稿】\n\(d)\n潤飾後的逐字稿")
+        #expect(m[2] == "🌡️【情緒分析】\n\(d)\n整體平靜")
+        #expect(m[3].hasPrefix("💌【回覆建議】\n\(d)\n1. "))
     }
 
     @Test func repliesAreNumbered() {
         let m = MessageFormatter.format(sample)
-        #expect(m[2].contains("1. 好的，我知道了"))
-        #expect(m[2].contains("2. 晚點回你"))
+        #expect(m[3].contains("1. 好的，我知道了"))
+        #expect(m[3].contains("2. 晚點回你"))
     }
 
     @Test func emptyFieldsBecomeNone() {
@@ -35,9 +36,9 @@ import Testing
         let family = "👨‍👩‍👧"
         let long = String(repeating: family + "中文", count: 6000)
         let m = MessageFormatter.format(Analysis(polished: long, summary: "s", sentiment: "x", replies: ["r"]))
-        #expect(m[3].utf16.count <= 5000)
-        #expect(m[3].hasSuffix("…（已截斷）"))
-        let body = String(m[3].dropLast("…（已截斷）".count))
+        #expect(m[1].utf16.count <= 5000)
+        #expect(m[1].hasSuffix("…（已截斷）"))
+        let body = String(m[1].dropLast("…（已截斷）".count))
         let last = body.last!
         #expect(last == "文" || last == Character(family))
         #expect(!body.hasSuffix("\u{200D}"))

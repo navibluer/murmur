@@ -4,6 +4,13 @@ public enum MessageFormatter {
     public static let limit = 5000
     static let suffix = "…（已截斷）"
     static let none = "（無）"
+    static let divider = "━━━━━━━━━━"
+    static let summaryHeader = "🧭【重點整理】"
+    static let transcriptHeader = "🎙️【逐字稿】"
+    static let sentimentHeader = "🌡️【情緒分析】"
+    static let repliesHeader = "💌【回覆建議】"
+
+    static func header(_ title: String) -> String { title + "\n" + divider + "\n" }
 
     public static func format(_ a: Analysis) -> [String] {
         let replies: String
@@ -14,10 +21,10 @@ public enum MessageFormatter {
             replies = cleaned.enumerated().map { "\($0.offset + 1). \($0.element)" }.joined(separator: "\n\n")
         }
         return [
-            truncate("📌 重點整理\n" + orNone(a.summary)),
-            truncate("💭 情緒分析\n" + orNone(a.sentiment)),
-            truncate("💬 回覆建議\n" + replies),
-            truncate("📝 潤飾逐字稿\n" + orNone(a.polished)),
+            truncate(header(summaryHeader) + orNone(a.summary)),
+            truncate(header(transcriptHeader) + orNone(a.polished)),
+            truncate(header(sentimentHeader) + orNone(a.sentiment)),
+            truncate(header(repliesHeader) + replies),
         ]
     }
 
