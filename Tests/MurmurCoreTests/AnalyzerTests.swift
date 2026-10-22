@@ -90,4 +90,26 @@ final class StubProtocol: URLProtocol, @unchecked Sendable {
             _ = try await makeAnalyzer().analyze(transcript: "x")
         }
     }
+
+    @Test func maxTokensThrowsTruncated() async {
+        StubProtocol.handler = { _, _ in
+            (200, try! JSONSerialization.data(withJSONObject: [
+                "content": [["type": "text", "text": "cut"]], "stop_reason": "max_tokens",
+            ]))
+        }
+        await #expect(throws: AnalyzerError.truncated) {
+            _ = try await makeAnalyzer().analyze(transcript: "x")
+        }
+    }
+
+    @Test func workspaceHeaderSentOnlyWhenSet() async throws {
+        let cfg = URLSessionConfiguration.ephemeral
+        cfg.protocolClasses = [StubProtocol.self]
+        let ok = toolUseResponse(["polished": "a", "summary": "b", "sentiment": "c", "replies": []])
+        StubProtocol.handler = { _, _ in (200, ok) }
+        _ = try await ClaudeAnalyzer(apiKey: "k", model: "m", session: URLSession(configuration: cfg), workspaceID: "ws_123").analyze(transcript: "x")
+        #expect(StubProtocol.lastRequest?.value(forHTTPHeaderField: "anthropic-workspace-id") == "ws_123")
+        _ = try await ClaudeAnalyzer(apiKey: "k", model: "m", session: URLSession(configuration: cfg)).analyze(transcript: "x")
+        #expect(StubProtocol.lastRequest?.value(forHTTPHeaderField: "anthropic-workspace-id") == nil)
+    }
 }

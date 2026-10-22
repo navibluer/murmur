@@ -19,6 +19,7 @@ public struct Analysis: Codable, Equatable, Sendable {
 
 public enum AnalyzerError: Error, Equatable {
     case malformedResponse
+    case truncated
     case http(status: Int, body: String)
 }
 
@@ -31,8 +32,10 @@ public struct ClaudeAnalyzer: Analyzer {
     let model: String
     let session: URLSession
     let workspaceID: String?
+    let timeout: TimeInterval
 
-    public init(apiKey: String, model: String, session: URLSession = .shared, workspaceID: String? = nil) {
+    public init(apiKey: String, model: String, session: URLSession = .shared, workspaceID: String? = nil, timeout: TimeInterval = 180) {
+        self.timeout = timeout
         self.apiKey = apiKey
         self.model = model
         self.workspaceID = workspaceID
@@ -69,7 +72,7 @@ public struct ClaudeAnalyzer: Analyzer {
     public func analyze(transcript: String) async throws -> Analysis {
         var req = URLRequest(url: URL(string: "https://api.anthropic.com/v1/messages")!)
         req.httpMethod = "POST"
-        req.timeoutInterval = 45
+        req.timeoutInterval = timeout
         req.setValue(apiKey, forHTTPHeaderField: "x-api-key")
         req.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
         req.setValue("application/json", forHTTPHeaderField: "content-type")
@@ -93,7 +96,9 @@ public struct ClaudeAnalyzer: Analyzer {
         guard (200..<300).contains(http.statusCode) else {
             throw AnalyzerError.http(status: http.statusCode, body: String(decoding: data.prefix(500), as: UTF8.self))
         }
-        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+        let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        if parsed?["stop_reason"] as? String == "max_tokens" { throw AnalyzerError.truncated }
+        guard let root = parsed,
             let content = root["content"] as? [[String: Any]],
             let block = content.first(where: { $0["type"] as? String == "tool_use" && $0["name"] as? String == "submit_analysis" }),
             let input = block["input"] as? [String: Any],
