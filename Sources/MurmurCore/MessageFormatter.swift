@@ -5,10 +5,10 @@ public enum MessageFormatter {
     static let suffix = "…（已截斷）"
     static let none = "（無）"
     static let divider = "━━━━━━━━━━"
-    static let summaryHeader = "🧭【重點整理】"
+    static let summaryHeader = "💡【重點整理】"
     static let transcriptHeader = "🎙️【逐字稿】"
     static let sentimentHeader = "🌡️【情緒分析】"
-    static let repliesHeader = "💌【回覆建議】"
+    static let repliesHeader = "🪄【回覆建議】"
 
     static func header(_ title: String) -> String { title + "\n" + divider + "\n" }
 

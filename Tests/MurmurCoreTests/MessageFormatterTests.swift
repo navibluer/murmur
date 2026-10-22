@@ -10,10 +10,10 @@ import Testing
         let m = MessageFormatter.format(sample)
         #expect(m.count == 4)
         let d = "━━━━━━━━━━"
-        #expect(m[0] == "🧭【重點整理】\n\(d)\n- 重點一\n- 重點二")
+        #expect(m[0] == "💡【重點整理】\n\(d)\n- 重點一\n- 重點二")
         #expect(m[1] == "🎙️【逐字稿】\n\(d)\n潤飾後的逐字稿")
         #expect(m[2] == "🌡️【情緒分析】\n\(d)\n整體平靜")
-        #expect(m[3].hasPrefix("💌【回覆建議】\n\(d)\n1. "))
+        #expect(m[3].hasPrefix("🪄【回覆建議】\n\(d)\n1. "))
     }
 
     @Test func repliesAreNumbered() {
