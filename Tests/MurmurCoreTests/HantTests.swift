@@ -9,4 +9,8 @@ import Testing
     @Test func keepsTraditionalUnchanged() {
         #expect(Hant.convert("已經是繁體") == "已經是繁體")
     }
+
+    @Test func doesNotCorruptTraditionalWithAmbiguousChars() {
+        #expect(Hant.convert("只要你願意，這件事就說定了") == "只要你願意，這件事就說定了")
+    }
 }
