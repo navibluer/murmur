@@ -1,0 +1,117 @@
+#!/bin/bash
+# 管理 Murmur 背景服務（launchd LaunchAgent）：murmur serve 與 ngrok tunnel。
+# 用法：scripts/murmurctl install|uninstall|start|stop|restart|status|logs [serve|ngrok] [-n 行數]
+set -euo pipefail
+
+REPO="$(cd "$(dirname "$0")/.." && pwd)"
+AGENTS="$HOME/Library/LaunchAgents"
+LOGS="$HOME/Library/Logs/murmur"
+DOMAIN="gui/$(id -u)"
+SERVE_LABEL="com.murmur.serve"
+NGROK_LABEL="com.murmur.ngrok"
+BIN="$REPO/.build/release/murmur"
+NGROK_URL="${NGROK_URL:-https://example.ngrok-free.app}"
+
+port() {
+  local p
+  p="$(grep -E '^PORT=' "$REPO/.env" 2>/dev/null | tail -1 | cut -d= -f2 | tr -d '[:space:]"' || true)"
+  echo "${p:-47821}"
+}
+
+ngrok_bin() { command -v ngrok || echo /opt/homebrew/bin/ngrok; }
+
+write_plist() { # label, log name, program args...
+  local label="$1" log="$2"; shift 2
+  local args=""
+  for a in "$@"; do args+="    <string>$a</string>"$'\n'; done
+  cat > "$AGENTS/$label.plist" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>$label</string>
+  <key>ProgramArguments</key>
+  <array>
+$args  </array>
+  <key>WorkingDirectory</key><string>$REPO</string>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>ThrottleInterval</key><integer>10</integer>
+  <key>StandardOutPath</key><string>$LOGS/$log.log</string>
+  <key>StandardErrorPath</key><string>$LOGS/$log.log</string>
+</dict>
+</plist>
+EOF
+}
+
+load() { launchctl bootstrap "$DOMAIN" "$AGENTS/$1.plist"; }
+unload() { launchctl bootout "$DOMAIN/$1" 2>/dev/null || true; }
+
+case "${1:-}" in
+  install)
+    echo "建置 release 版本…"
+    (cd "$REPO" && swift build -c release 2>&1 | tail -1)
+    mkdir -p "$AGENTS" "$LOGS"
+    write_plist "$SERVE_LABEL" serve "$BIN" serve
+    write_plist "$NGROK_LABEL" ngrok "$(ngrok_bin)" http "$(port)" --url "$NGROK_URL" --log stdout
+    for l in "$SERVE_LABEL" "$NGROK_LABEL"; do unload "$l"; load "$l"; done
+    echo "已安裝並啟動。之後登入就會自動執行。log：$LOGS"
+    ;;
+  uninstall)
+    for l in "$SERVE_LABEL" "$NGROK_LABEL"; do unload "$l"; rm -f "$AGENTS/$l.plist"; done
+    echo "已停止並移除自動啟動（log 保留在 $LOGS）"
+    ;;
+  start)
+    for l in "$SERVE_LABEL" "$NGROK_LABEL"; do load "$l" 2>/dev/null || launchctl kickstart "$DOMAIN/$l"; done
+    ;;
+  stop)
+    for l in "$SERVE_LABEL" "$NGROK_LABEL"; do unload "$l"; done
+    echo "已停止（下次登入仍會自動啟動；要永久停用請用 uninstall）"
+    ;;
+  restart)
+    echo "重新建置…"
+    (cd "$REPO" && swift build -c release 2>&1 | tail -1)
+    for l in "$SERVE_LABEL" "$NGROK_LABEL"; do launchctl kickstart -k "$DOMAIN/$l"; done
+    echo "已重啟"
+    ;;
+  status)
+    for l in "$SERVE_LABEL" "$NGROK_LABEL"; do
+      if info="$(launchctl print "$DOMAIN/$l" 2>/dev/null)"; then
+        state="$(echo "$info" | awk -F'= ' '/^\tstate/{print $2; exit}')"
+        pid="$(echo "$info" | awk -F'= ' '/^\tpid/{print $2; exit}')"
+        echo "${l}：${state:-unknown}${pid:+ (pid $pid)}"
+      else
+        echo "${l}：未載入"
+      fi
+    done
+    if curl -fsS "http://127.0.0.1:$(port)/health" >/dev/null 2>&1; then echo "health：OK"; else echo "health：無回應"; fi
+    ;;
+  logs)
+    shift
+    target="serve"; lines=50
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        serve|ngrok) target="$1" ;;
+        all) target="all" ;;
+        -n) lines="$2"; shift ;;
+      esac
+      shift
+    done
+    if [ "$target" = all ]; then
+      tail -n "$lines" -F "$LOGS/serve.log" "$LOGS/ngrok.log"
+    else
+      tail -n "$lines" -F "$LOGS/$target.log"
+    fi
+    ;;
+  *)
+    cat <<EOF
+用法：scripts/murmurctl <指令>
+  install     建置 release、安裝並啟動（開機登入自動執行）
+  uninstall   停止並移除自動啟動
+  start|stop  啟動／停止
+  restart     重新建置並重啟（改完程式碼後用）
+  status      顯示執行狀態與 health
+  logs [serve|ngrok|all] [-n 行數]   即時顯示 log（Ctrl+C 離開，服務不受影響）
+EOF
+    ;;
+esac

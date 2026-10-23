@@ -17,6 +17,7 @@ swift test --filter ServerTests # 單一 suite／測試
 swift run murmur transcribe <音檔>  # 只做語音辨識
 swift run murmur analyze <音檔>     # 辨識 + Claude 分析（需 ANTHROPIC_API_KEY）
 swift run murmur serve              # 啟動 LINE webhook 伺服器（預設 127.0.0.1:47821）
+scripts/murmurctl install           # 背景常駐（見下方「背景常駐」）
 ```
 
 `serve` 會讀取目前目錄的 `.env`（範本見 `.env.example`），並與環境變數合併，環境變數優先。路由：`POST /webhook`（LINE，驗簽後立即回 200，背景處理）、`GET /health`（回 `ok`）。
@@ -39,3 +40,20 @@ ngrok http 47821 --url https://<你的網域>
 ```
 
 指令格式依 ngrok 官方 CLI 文件（`ngrok http 8080 --url https://baz.ngrok.dev`）。自選網域名稱是否需付費方案依 ngrok 文件為付費功能；免費帳號可使用自動配發的 dev domain（網域於 ngrok dashboard 的 Domains 頁查看，此步驟未確認）。
+
+## 背景常駐（launchd）
+
+`scripts/murmurctl` 把 `murmur serve`（release 版）與 ngrok 註冊成使用者的 LaunchAgent：登入後自動啟動，程式結束會自動重啟。
+
+```sh
+scripts/murmurctl install      # 建置 release、安裝並啟動
+scripts/murmurctl status       # 執行狀態與 health
+scripts/murmurctl logs         # 即時看 serve log（ngrok / all 可切換，-n 指定行數；Ctrl+C 離開不影響服務）
+scripts/murmurctl restart      # 改完程式碼後：重新建置並重啟
+scripts/murmurctl stop         # 暫停（下次登入仍會啟動）
+scripts/murmurctl uninstall    # 移除自動啟動
+```
+
+- log 位置：`~/Library/Logs/murmur/serve.log`、`ngrok.log`。
+- ngrok 網域預設為本專案使用的網域，可用 `NGROK_URL=https://… scripts/murmurctl install` 覆寫。
+- 背景程式無法讀取 `~/Downloads`、`~/Documents` 等受保護資料夾；服務本身只用暫存目錄，不受影響。
