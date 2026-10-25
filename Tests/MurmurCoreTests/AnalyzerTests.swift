@@ -130,11 +130,63 @@ final class StubProtocol: URLProtocol, @unchecked Sendable {
     @Test func workspaceHeaderSentOnlyWhenSet() async throws {
         let cfg = URLSessionConfiguration.ephemeral
         cfg.protocolClasses = [StubProtocol.self]
-        let ok = toolUseResponse(["polished": "a", "summary": "b", "sentiment": "c", "replies": [], "category": "c"])
+        let ok = toolUseResponse(["polished": "a", "summary": "b", "sentiment": "c", "replies": ["d"], "category": "c"])
         StubProtocol.handler = { _, _ in (200, ok) }
         _ = try await ClaudeAnalyzer(apiKey: "k", model: "m", session: URLSession(configuration: cfg), workspaceID: "ws_123").analyze(transcript: "x", categories: ["家庭生活"])
         #expect(StubProtocol.lastRequest?.value(forHTTPHeaderField: "anthropic-workspace-id") == "ws_123")
         _ = try await ClaudeAnalyzer(apiKey: "k", model: "m", session: URLSession(configuration: cfg)).analyze(transcript: "x", categories: ["家庭生活"])
         #expect(StubProtocol.lastRequest?.value(forHTTPHeaderField: "anthropic-workspace-id") == nil)
+    }
+
+    func good(_ tag: String = "") -> [String: Any] {
+        ["polished": "潤飾\(tag)", "summary": "- 重點", "sentiment": "平穩", "replies": ["好的"], "category": "家庭生活"]
+    }
+    var bad: [String: Any] { ["polished": "placeholder", "summary": "", "sentiment": "placeholder", "replies": [], "category": "placeholder"] }
+
+    final class Counter: @unchecked Sendable { nonisolated(unsafe) var n = 0 }
+
+    @Test func retriesWhenPlaceholderThenSucceeds() async throws {
+        let c = Counter()
+        let badData = toolUseResponse(bad), goodData = toolUseResponse(good())
+        StubProtocol.handler = { _, _ in c.n += 1; return (200, c.n == 1 ? badData : goodData) }
+        let a = try await makeAnalyzer().analyze(transcript: "x", categories: ["家庭生活"])
+        #expect(c.n == 2)
+        #expect(a.polished == "潤飾")
+    }
+
+    @Test func picksFirstValidToolUseInSameResponse() async throws {
+        let c = Counter()
+        let obj: [String: Any] = ["stop_reason": "tool_use", "content": [
+            ["type": "tool_use", "id": "1", "name": "submit_analysis", "input": ["polished": "p", "summary": "", "sentiment": "s", "replies": ["r"], "category": "c"]],
+            ["type": "tool_use", "id": "2", "name": "submit_analysis", "input": good("二")],
+        ]]
+        let data = try JSONSerialization.data(withJSONObject: obj)
+        StubProtocol.handler = { _, _ in c.n += 1; return (200, data) }
+        let a = try await makeAnalyzer().analyze(transcript: "x", categories: ["家庭生活"])
+        #expect(c.n == 1)
+        #expect(a.polished == "潤飾二")
+    }
+
+    @Test func throwsInvalidContentAfterThreeAttempts() async {
+        let c = Counter()
+        let badData = toolUseResponse(bad)
+        StubProtocol.handler = { _, _ in c.n += 1; return (200, badData) }
+        await #expect(throws: AnalyzerError.invalidContent) {
+            _ = try await makeAnalyzer().analyze(transcript: "x", categories: ["家庭生活"])
+        }
+        #expect(c.n == 3)
+    }
+
+    @Test func isValidBoundaries() {
+        let ok = Analysis(polished: "a", summary: "b", sentiment: "c", replies: ["d"], category: "e")
+        #expect(ClaudeAnalyzer.isValid(ok))
+        var x = ok; x.summary = "  \n "; #expect(!ClaudeAnalyzer.isValid(x))
+        x = ok; x.polished = "Placeholder"; #expect(!ClaudeAnalyzer.isValid(x))
+        x = ok; x.sentiment = "這是 PlaceHolder 文字"; #expect(!ClaudeAnalyzer.isValid(x))
+        x = ok; x.category = "TBD"; #expect(!ClaudeAnalyzer.isValid(x))
+        x = ok; x.category = " n/a "; #expect(!ClaudeAnalyzer.isValid(x))
+        x = ok; x.replies = []; #expect(!ClaudeAnalyzer.isValid(x))
+        x = ok; x.replies = ["好", "placeholder"]; #expect(!ClaudeAnalyzer.isValid(x))
+        x = ok; x.replies = ["好", " "]; #expect(!ClaudeAnalyzer.isValid(x))
     }
 }

@@ -22,6 +22,7 @@ public struct Analysis: Codable, Equatable, Sendable {
 public enum AnalyzerError: Error, Equatable {
     case malformedResponse
     case truncated
+    case invalidContent
     case http(status: Int, body: String)
 }
 
@@ -60,6 +61,7 @@ public struct ClaudeAnalyzer: Analyzer {
         名字校正：逐字稿中聽起來像「小明」的同音或近音詞（例如燕主、院主、燕竹、延竹、言竹、彥築），\
         若依上下文判斷是在稱呼或提到人，潤飾時一律改為「小明」；若明顯是其他詞義則保留原文。
         除此之外，只依語音內容判斷，不要臆測沒有出現的脈絡。
+        每個欄位都必須是根據逐字稿寫出的完整內容，嚴禁填入 placeholder、空字串或任何佔位文字；只呼叫一次 submit_analysis。
         """
 
     static var tool: [String: Any] { [
@@ -102,6 +104,17 @@ public struct ClaudeAnalyzer: Analyzer {
         ]
         req.httpBody = try JSONSerialization.data(withJSONObject: body)
 
+        for attempt in 1...Self.maxAttempts {
+            if let result = try await attemptOnce(req) { return result }
+            if attempt < Self.maxAttempts { print("分析結果不完整（第 \(attempt) 次），重試") }
+        }
+        throw AnalyzerError.invalidContent
+    }
+
+    static let maxAttempts = 3
+
+    /// 回傳 nil 代表內容不合格（需重試）；其餘錯誤維持原行為直接丟出。
+    private func attemptOnce(_ req: URLRequest) async throws -> Analysis? {
         let (data, resp) = try await session.data(for: req)
         guard let http = resp as? HTTPURLResponse else { throw AnalyzerError.malformedResponse }
         guard (200..<300).contains(http.statusCode) else {
@@ -109,22 +122,37 @@ public struct ClaudeAnalyzer: Analyzer {
         }
         let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         if parsed?["stop_reason"] as? String == "max_tokens" { throw AnalyzerError.truncated }
-        guard let root = parsed,
-            let content = root["content"] as? [[String: Any]],
-            let block = content.first(where: { $0["type"] as? String == "tool_use" && $0["name"] as? String == "submit_analysis" }),
-            let input = block["input"] as? [String: Any],
-            let polished = input["polished"] as? String,
-            let summary = input["summary"] as? String,
-            let sentiment = input["sentiment"] as? String,
-            let replies = input["replies"] as? [String],
-            let category = input["category"] as? String
-        else { throw AnalyzerError.malformedResponse }
+        guard let root = parsed, let content = root["content"] as? [[String: Any]] else { throw AnalyzerError.malformedResponse }
+        let blocks = content.filter { $0["type"] as? String == "tool_use" && $0["name"] as? String == "submit_analysis" }
+        guard !blocks.isEmpty else { throw AnalyzerError.malformedResponse }
 
         func clean(_ s: String) -> String { Hant.convert(Self.unescape(s)) }
-        return Analysis(
-            polished: clean(polished), summary: clean(summary),
-            sentiment: clean(sentiment), replies: replies.map(clean),
-            category: clean(category).trimmingCharacters(in: .whitespacesAndNewlines))
+        for block in blocks {
+            guard let input = block["input"] as? [String: Any],
+                let polished = input["polished"] as? String,
+                let summary = input["summary"] as? String,
+                let sentiment = input["sentiment"] as? String,
+                let replies = input["replies"] as? [String],
+                let category = input["category"] as? String
+            else { continue }
+            let a = Analysis(
+                polished: clean(polished), summary: clean(summary),
+                sentiment: clean(sentiment), replies: replies.map(clean),
+                category: clean(category).trimmingCharacters(in: .whitespacesAndNewlines))
+            if Self.isValid(a) { return a }
+        }
+        return nil
+    }
+
+    /// 欄位不可為空白、佔位字樣（placeholder／todo／tbd／n/a）；replies 至少一則且每則都要合格。
+    static func isValid(_ a: Analysis) -> Bool {
+        func ok(_ s: String) -> Bool {
+            let t = s.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            if t.isEmpty || t.contains("placeholder") { return false }
+            return !["todo", "tbd", "n/a"].contains(t)
+        }
+        return [a.polished, a.summary, a.sentiment, a.category].allSatisfy(ok)
+            && !a.replies.isEmpty && a.replies.allSatisfy(ok)
     }
 
     /// 模型偶爾會雙重跳脫，解碼後留下字面的反斜線加字母；還原成真正的字元。
