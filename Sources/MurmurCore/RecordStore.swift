@@ -40,9 +40,20 @@ public protocol RecordStore: Sendable {
 
 /// RFC 4180 CSV 編碼與解析。
 public enum CSV {
+    static let formulaTriggers: Set<Unicode.Scalar> = ["=", "+", "-", "@"]
+
+    /// 還原 `encode` 為避免 Excel 公式而補的前導空白。
+    static func unescapeFormula(_ f: String) -> String {
+        let u = Array(f.unicodeScalars)
+        if u.count >= 2, u[0] == " ", formulaTriggers.contains(u[1]) { return String(String.UnicodeScalarView(u.dropFirst())) }
+        return f
+    }
+
     public static func encode(_ fields: [String]) -> String {
-        fields.map { f in
-            f.unicodeScalars.contains(where: { ",\"\n\r".unicodeScalars.contains($0) })
+        fields.map { raw in
+            // Excel 會把 = + - @ 開頭的儲存格當公式；前面補一個空白，讀回時還原
+            let f = formulaTriggers.contains(raw.unicodeScalars.first ?? "a") ? " " + raw : raw
+            return f.unicodeScalars.contains(where: { ",\"\n\r".unicodeScalars.contains($0) })
                 ? "\"" + f.replacingOccurrences(of: "\"", with: "\"\"") + "\""
                 : f
         }.joined(separator: ",") + "\r\n"
@@ -50,6 +61,17 @@ public enum CSV {
 
     /// 解析整份 CSV（容許開頭 BOM、`\r\n` 或 `\n` 列結尾、引號內換行與 `""`）。
     public static func parse(_ text: String) throws -> [[String]] {
+        let r = parseCore(text)
+        if r.openQuote { throw CSVError.unterminatedQuote }
+        return r.rows
+    }
+
+    /// 容錯版：引號未閉合時（例如寫入中途被中斷）丟棄最後那段殘列，其餘照常回傳。
+    static func parseTolerant(_ text: String) -> (rows: [[String]], openQuote: Bool) {
+        parseCore(text)
+    }
+
+    private static func parseCore(_ text: String) -> (rows: [[String]], openQuote: Bool) {
         var rows: [[String]] = []
         var row: [String] = []
         var field = String.UnicodeScalarView()
@@ -91,9 +113,9 @@ public enum CSV {
             }
         }
         if pendingQuote { inQuotes = false }
-        if inQuotes { throw CSVError.unterminatedQuote }
+        if inQuotes { return (rows, true) }
         if !field.isEmpty || wasQuoted || !row.isEmpty { endRow() }
-        return rows
+        return (rows, false)
     }
 }
 
@@ -111,7 +133,7 @@ public final class CSVRecordStore: RecordStore, @unchecked Sendable {
     public func categories() throws -> [String] {
         lock.lock(); defer { lock.unlock() }
         var out = RecordStoreDefaults.seedCategories
-        for r in try readAll() where !r.analysis.category.isEmpty && !out.contains(r.analysis.category) {
+        for r in readAll() where !r.analysis.category.isEmpty && !out.contains(r.analysis.category) {
             out.append(r.analysis.category)
         }
         return out
@@ -119,35 +141,57 @@ public final class CSVRecordStore: RecordStore, @unchecked Sendable {
 
     public func find(fingerprint: String) throws -> Record? {
         lock.lock(); defer { lock.unlock() }
-        return try readAll().first { $0.fingerprint == fingerprint }
+        return readAll().first { $0.fingerprint == fingerprint }
     }
 
     public func append(_ r: Record) throws {
         lock.lock(); defer { lock.unlock() }
-        if try readAll().contains(where: { $0.fingerprint == r.fingerprint }) { return }
+        if readAll().contains(where: { $0.fingerprint == r.fingerprint }) { return }
         let fm = FileManager.default
         let row = CSV.encode([
             r.time, r.fingerprint, r.analysis.category, r.analysis.summary, r.analysis.polished,
             r.analysis.sentiment, Self.joinReplies(r.analysis.replies),
         ])
-        if !fm.fileExists(atPath: url.path) {
-            try fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-            var data = Data([0xEF, 0xBB, 0xBF])
-            data.append(Data((CSV.encode(Self.header) + row).utf8))
-            try data.write(to: url)
+        let bom = Data([0xEF, 0xBB, 0xBF])
+        let headerLine = CSV.encode(Self.header)
+        var existing = Data()
+        if fm.fileExists(atPath: url.path) {
+            existing = (try? Data(contentsOf: url)) ?? Data()
         } else {
+            try fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        }
+        let body = existing.starts(with: bom) ? existing.dropFirst(3) : existing[...]
+        if body.isEmpty {
+            // 不存在、0 bytes 或只有 BOM：重寫 BOM + 表頭 + 此列
+            try (bom + Data((headerLine + row).utf8)).write(to: url)
+            return
+        }
+        let text = String(decoding: body, as: UTF8.self)
+        let hasHeader = text.hasPrefix(Self.header.joined(separator: ","))
+        let closer: String
+        if CSV.parseTolerant(text).openQuote {
+            closer = "\"\r\n"  // 收掉未閉合引號的殘列，讓新列能正確讀回
+        } else {
+            closer = body.last == 0x0A ? "" : "\r\n"
+        }
+        if hasHeader {
             let h = try FileHandle(forWritingTo: url)
             defer { try? h.close() }
             try h.seekToEnd()
-            try h.write(contentsOf: Data(row.utf8))
+            try h.write(contentsOf: Data((closer + row).utf8))
+        } else {
+            // 缺表頭：整檔重寫為 BOM + 表頭 + 原內容 + 收尾 + 新列
+            try (bom + Data(headerLine.utf8) + body + Data((closer + row).utf8)).write(to: url)
         }
     }
 
-    private func readAll() throws -> [Record] {
-        guard FileManager.default.fileExists(atPath: url.path) else { return [] }
-        let text = String(decoding: try Data(contentsOf: url), as: UTF8.self)
-        return try CSV.parse(text).dropFirst().compactMap { f in
-            guard f.count >= 7 else { return nil }
+    /// 讀取失敗或檔案損毀都當作盡力而為：略過壞列，不丟錯。
+    private func readAll() -> [Record] {
+        guard let data = try? Data(contentsOf: url) else { return [] }
+        let rows = CSV.parseTolerant(String(decoding: data, as: UTF8.self)).rows
+        return rows.compactMap { raw in
+            guard raw.count == 7, raw != Self.header else { return nil }
+            let f = raw.map(CSV.unescapeFormula)
             return Record(
                 time: f[0], fingerprint: f[1],
                 analysis: Analysis(

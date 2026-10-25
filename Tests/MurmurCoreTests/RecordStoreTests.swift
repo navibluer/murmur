@@ -77,4 +77,68 @@ import Testing
         #expect(try CSV.parse(text) == [["a", "b"], ["x,\"y\"\nz", ""]])
         #expect(CSV.encode(["x,\"y\"\nz", "plain", "a\rb"]) == "\"x,\"\"y\"\"\nz\",plain,\"a\rb\"\r\n")
     }
+
+    @Test func recoversFromUnterminatedQuoteTail() throws {
+        let store = CSVRecordStore(url: url)
+        try store.append(Record(time: "t", fingerprint: "old", analysis: analysis()))
+        let h = try FileHandle(forWritingTo: url)
+        try h.seekToEnd()
+        try h.write(contentsOf: Data("t,broken,分類,\"半列沒有結尾\r\n還有內容".utf8))
+        try h.close()
+        // 讀取不丟錯，舊紀錄仍在
+        #expect(try store.find(fingerprint: "old") != nil)
+        #expect(try store.categories().count == 5)
+        try store.append(Record(time: "t", fingerprint: "new", analysis: analysis(category: "新類")))
+        #expect(try store.find(fingerprint: "old") != nil)
+        #expect(try store.find(fingerprint: "new")?.analysis.category == "新類")
+    }
+
+    @Test func skipsRowsWithWrongFieldCount() throws {
+        let store = CSVRecordStore(url: url)
+        try store.append(Record(time: "t", fingerprint: "old", analysis: analysis()))
+        let h = try FileHandle(forWritingTo: url)
+        try h.seekToEnd()
+        try h.write(contentsOf: Data("a,b,c\r\n".utf8))
+        try h.close()
+        try store.append(Record(time: "t", fingerprint: "new", analysis: analysis()))
+        #expect(try store.find(fingerprint: "old") != nil && store.find(fingerprint: "new") != nil)
+    }
+
+    @Test func appendAfterMissingTrailingNewline() throws {
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let row = CSV.encode(["t", "old", "家庭生活", "s", "p", "x", "1. r"])
+        var data = Data([0xEF, 0xBB, 0xBF])
+        data.append(Data((CSV.encode(CSVRecordStore.header) + row.dropLast(2)).utf8))
+        try data.write(to: url)
+        let store = CSVRecordStore(url: url)
+        try store.append(Record(time: "t", fingerprint: "new", analysis: analysis()))
+        #expect(try store.find(fingerprint: "old") != nil && store.find(fingerprint: "new") != nil)
+    }
+
+    @Test func emptyOrBOMOnlyFileGetsHeader() throws {
+        for initial in [Data(), Data([0xEF, 0xBB, 0xBF])] {
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try initial.write(to: url)
+            let store = CSVRecordStore(url: url)
+            try store.append(Record(time: "t", fingerprint: "n", analysis: analysis()))
+            #expect(try store.find(fingerprint: "n") != nil)
+            let data = try Data(contentsOf: url)
+            #expect(Array(data.prefix(3)) == [0xEF, 0xBB, 0xBF])
+            let text = String(decoding: data.dropFirst(3), as: UTF8.self)
+            #expect(text.hasPrefix("時間,指紋,分類,重點整理,逐字稿,情緒分析,回覆建議\r\n"))
+            try FileManager.default.removeItem(at: url)
+        }
+    }
+
+    @Test func formulaLikeFieldsAreEscapedAndRoundTrip() throws {
+        let store = CSVRecordStore(url: url)
+        let a = Analysis(polished: "=SUM(1)", summary: "- 重點\n- 二", sentiment: "+1", replies: ["@某人"], category: "家庭生活")
+        try store.append(Record(time: "t", fingerprint: "f", analysis: a))
+        let raw = String(decoding: try Data(contentsOf: url), as: UTF8.self)
+        #expect(raw.contains(",\" - 重點\n- 二\","))
+        #expect(raw.contains(", =SUM(1),"))
+        let back = try #require(try store.find(fingerprint: "f"))
+        #expect(back.analysis.summary == a.summary && back.analysis.polished == a.polished)
+        #expect(back.analysis.sentiment == "+1")
+    }
 }

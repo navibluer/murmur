@@ -75,7 +75,11 @@ final class FakeStore: RecordStore, @unchecked Sendable {
     var cats = ["家庭生活", "自訂"]
     var appendError: Error?
     var findError: Error?
-    func categories() throws -> [String] { cats }
+    var categoriesError: Error?
+    func categories() throws -> [String] {
+        if let categoriesError { throw categoriesError }
+        return cats
+    }
     func find(fingerprint: String) throws -> Record? {
         if let findError { throw findError }
         return records.value.first { $0.fingerprint == fingerprint }
@@ -296,9 +300,11 @@ struct Boom: Error {}
 
     @Test func storeReadFailureTreatedAsMissingWithSeedCategories() async throws {
         store.findError = Boom()
+        store.categoriesError = Boom()
         let p = make()
         await p.handle(try event(), receivedAt: start)
         #expect(an.count.value == 1)
+        #expect(an.seenCategories.value == [RecordStoreDefaults.seedCategories])
         #expect(line.replies.value.first?.count == 4)
     }
 
