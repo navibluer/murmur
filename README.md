@@ -35,6 +35,7 @@ swift test --filter ServerTests # 單一 suite／測試
 swift run murmur transcribe <音檔>  # 只做語音辨識
 swift run murmur analyze <音檔>     # 辨識 + Claude 分析（需 ANTHROPIC_API_KEY）
 swift run murmur serve              # 啟動 LINE webhook 伺服器（預設 127.0.0.1:47821）
+swift run murmur backfill <訊息ID>...  # 補存舊語音到 CSV（時間填補存當下，不送 LINE 訊息）
 scripts/murmurctl install           # 背景常駐（見上方「背景常駐」）
 ```
 
