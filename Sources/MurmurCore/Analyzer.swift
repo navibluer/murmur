@@ -8,12 +8,14 @@ public struct Analysis: Codable, Equatable, Sendable {
     public var summary: String
     public var sentiment: String
     public var replies: [String]
+    public var category: String
 
-    public init(polished: String, summary: String, sentiment: String, replies: [String]) {
+    public init(polished: String, summary: String, sentiment: String, replies: [String], category: String = "") {
         self.polished = polished
         self.summary = summary
         self.sentiment = sentiment
         self.replies = replies
+        self.category = category
     }
 }
 
@@ -24,7 +26,7 @@ public enum AnalyzerError: Error, Equatable {
 }
 
 public protocol Analyzer: Sendable {
-    func analyze(transcript: String) async throws -> Analysis
+    func analyze(transcript: String, categories: [String]) async throws -> Analysis
 }
 
 public struct ClaudeAnalyzer: Analyzer {
@@ -50,6 +52,7 @@ public struct ClaudeAnalyzer: Analyzer {
         - sentiment：情緒分析，包含整體情緒、語氣，以及需要注意的地方。
         所有欄位需要換行時請直接輸出真正的換行字元，不要輸出跳脫序列（例如反斜線加 n）。
         - replies：2 到 3 則回覆建議（字串陣列），口吻自然，可直接傳送給對方。
+        - category：內容分類，單一簡短的繁體中文詞（2～6 個字）；優先從使用者提供的現有分類中選擇，都不適合時才自訂新分類。
         常見情境：這通常是「爸爸」傳給「小明」的語音訊息，使用者就是小明。請先依內容判斷是否符合這個情境\
         （例如說話者以長輩、父親的口吻對子女說話，或提到小明）：
         - 符合：回覆建議以小明回覆爸爸的身分與口吻撰寫；情緒分析可從父親對子女的角度解讀。
@@ -70,13 +73,14 @@ public struct ClaudeAnalyzer: Analyzer {
                 "summary": ["type": "string", "description": "條列式重點整理（繁體中文）；換行請用真正的換行字元，不要輸出跳脫序列"],
                 "sentiment": ["type": "string", "description": "情緒分析（繁體中文）；換行請用真正的換行字元，不要輸出跳脫序列"],
                 "replies": ["type": "array", "items": ["type": "string"], "description": "2～3 則回覆建議（繁體中文）"],
+                "category": ["type": "string", "description": "內容分類（繁體中文，2～6 個字）；優先使用現有分類，都不適合時自訂"],
             ],
-            "required": ["polished", "summary", "sentiment", "replies"],
+            "required": ["polished", "summary", "sentiment", "replies", "category"],
             "additionalProperties": false,
         ] as [String: Any],
     ] }
 
-    public func analyze(transcript: String) async throws -> Analysis {
+    public func analyze(transcript: String, categories: [String]) async throws -> Analysis {
         var req = URLRequest(url: URL(string: "https://api.anthropic.com/v1/messages")!)
         req.httpMethod = "POST"
         req.timeoutInterval = timeout
@@ -93,7 +97,7 @@ public struct ClaudeAnalyzer: Analyzer {
             "tool_choice": ["type": "auto"],
             "messages": [[
                 "role": "user",
-                "content": "請對以下逐字稿呼叫 submit_analysis 提交分析：\n\n\(transcript)",
+                "content": "目前分類：\(categories.joined(separator: "、"))。請從中選一個最符合的；都不適合時，自訂一個新的簡短分類（2～6 個字，繁體中文）。\n\n請對以下逐字稿呼叫 submit_analysis 提交分析：\n\n\(transcript)",
             ]],
         ]
         req.httpBody = try JSONSerialization.data(withJSONObject: body)
@@ -112,13 +116,15 @@ public struct ClaudeAnalyzer: Analyzer {
             let polished = input["polished"] as? String,
             let summary = input["summary"] as? String,
             let sentiment = input["sentiment"] as? String,
-            let replies = input["replies"] as? [String]
+            let replies = input["replies"] as? [String],
+            let category = input["category"] as? String
         else { throw AnalyzerError.malformedResponse }
 
         func clean(_ s: String) -> String { Hant.convert(Self.unescape(s)) }
         return Analysis(
             polished: clean(polished), summary: clean(summary),
-            sentiment: clean(sentiment), replies: replies.map(clean))
+            sentiment: clean(sentiment), replies: replies.map(clean),
+            category: clean(category).trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
     /// 模型偶爾會雙重跳脫，解碼後留下字面的反斜線加字母；還原成真正的字元。

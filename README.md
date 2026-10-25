@@ -40,6 +40,10 @@ scripts/murmurctl install           # 背景常駐（見上方「背景常駐」
 
 `serve` 會讀取目前目錄的 `.env`（範本見 `.env.example`），並與環境變數合併，環境變數優先。路由：`POST /webhook`（LINE，驗簽後立即回 200，背景處理）、`GET /health`（回 `ok`）。
 
+## 分析紀錄（CSV）
+
+`serve` 會把每則語音的分析結果追加到 CSV，預設 `data/records.csv`（相對於執行目錄，可用 `.env` 的 `RECORDS_PATH` 改；`data/` 已加入 `.gitignore`，目錄不存在會自動建立）。欄位：`時間,指紋,分類,重點整理,逐字稿,情緒分析,回覆建議`；UTF-8 含 BOM，Excel 可直接開啟。分類由 Claude 從現有分類（初始：家庭生活、健康醫療、金錢財務、工作事業、閒聊問候）挑選，都不適合時自訂新分類。指紋為原始辨識逐字稿的 SHA256 前 16 字元；同一段語音重複轉傳時直接沿用第一筆紀錄回覆，不再呼叫 Claude。
+
 ## LINE 設定
 
 1. 在 LINE Official Account Manager 建立 LINE 官方帳號。

@@ -50,10 +50,10 @@ final class StubProtocol: URLProtocol, @unchecked Sendable {
         StubProtocol.handler = { _, _ in
             (200, self.toolUseResponse([
                 "polished": "第一段\\n\\n第二段", "summary": "- a\\n- b\\r\\n- c", "sentiment": "好\\t棒\\n真的",
-                "replies": ["行一\\n行二"],
+                "replies": ["行一\\n行二"], "category": "家庭生活",
             ]))
         }
-        let a = try await makeAnalyzer().analyze(transcript: "原文")
+        let a = try await makeAnalyzer().analyze(transcript: "原文", categories: ["家庭生活"])
         #expect(a.summary == "- a\n- b\n- c")
         #expect(a.polished == "第一段\n\n第二段")
         #expect(a.sentiment == "好\t棒\n真的")
@@ -65,10 +65,10 @@ final class StubProtocol: URLProtocol, @unchecked Sendable {
         StubProtocol.handler = { _, _ in
             (200, self.toolUseResponse([
                 "polished": "这是简体中文的逐字稿", "summary": "这是重点", "sentiment": "心情很好",
-                "replies": ["好的，没问题", "晚点联系"],
+                "replies": ["好的，没问题", "晚点联系"], "category": " 家庭关系 ",
             ]))
         }
-        let a = try await makeAnalyzer().analyze(transcript: "原文")
+        let a = try await makeAnalyzer().analyze(transcript: "原文", categories: ["家庭生活"])
         let req = StubProtocol.lastRequest!
         #expect(req.httpMethod == "POST")
         #expect(req.url?.absoluteString == "https://api.anthropic.com/v1/messages")
@@ -86,12 +86,22 @@ final class StubProtocol: URLProtocol, @unchecked Sendable {
         #expect(a.summary == "這是重點")
         #expect(a.replies.count == 2)
         #expect(a.replies[0] == "好的，沒問題")
+        #expect(a.category == "家庭關係")
+        let schema = tools[0]["input_schema"] as! [String: Any]
+        #expect((schema["required"] as! [String]).contains("category"))
+        #expect((schema["properties"] as! [String: Any])["category"] != nil)
+        let msgs = body["messages"] as! [[String: Any]]
+        let user = msgs[0]["content"] as! String
+        #expect(user.contains("目前分類：家庭生活"))
+        #expect(user.contains("2～6 個字"))
+        #expect(user.contains("原文"))
+        #expect(!(body["system"] as! String).contains("目前分類"))
     }
 
     @Test func httpErrorThrows() async {
         StubProtocol.handler = { _, _ in (500, Data("{}".utf8)) }
         await #expect(throws: (any Error).self) {
-            _ = try await makeAnalyzer().analyze(transcript: "x")
+            _ = try await makeAnalyzer().analyze(transcript: "x", categories: ["家庭生活"])
         }
     }
 
@@ -102,7 +112,7 @@ final class StubProtocol: URLProtocol, @unchecked Sendable {
             ]))
         }
         await #expect(throws: AnalyzerError.malformedResponse) {
-            _ = try await makeAnalyzer().analyze(transcript: "x")
+            _ = try await makeAnalyzer().analyze(transcript: "x", categories: ["家庭生活"])
         }
     }
 
@@ -113,18 +123,18 @@ final class StubProtocol: URLProtocol, @unchecked Sendable {
             ]))
         }
         await #expect(throws: AnalyzerError.truncated) {
-            _ = try await makeAnalyzer().analyze(transcript: "x")
+            _ = try await makeAnalyzer().analyze(transcript: "x", categories: ["家庭生活"])
         }
     }
 
     @Test func workspaceHeaderSentOnlyWhenSet() async throws {
         let cfg = URLSessionConfiguration.ephemeral
         cfg.protocolClasses = [StubProtocol.self]
-        let ok = toolUseResponse(["polished": "a", "summary": "b", "sentiment": "c", "replies": []])
+        let ok = toolUseResponse(["polished": "a", "summary": "b", "sentiment": "c", "replies": [], "category": "c"])
         StubProtocol.handler = { _, _ in (200, ok) }
-        _ = try await ClaudeAnalyzer(apiKey: "k", model: "m", session: URLSession(configuration: cfg), workspaceID: "ws_123").analyze(transcript: "x")
+        _ = try await ClaudeAnalyzer(apiKey: "k", model: "m", session: URLSession(configuration: cfg), workspaceID: "ws_123").analyze(transcript: "x", categories: ["家庭生活"])
         #expect(StubProtocol.lastRequest?.value(forHTTPHeaderField: "anthropic-workspace-id") == "ws_123")
-        _ = try await ClaudeAnalyzer(apiKey: "k", model: "m", session: URLSession(configuration: cfg)).analyze(transcript: "x")
+        _ = try await ClaudeAnalyzer(apiKey: "k", model: "m", session: URLSession(configuration: cfg)).analyze(transcript: "x", categories: ["家庭生活"])
         #expect(StubProtocol.lastRequest?.value(forHTTPHeaderField: "anthropic-workspace-id") == nil)
     }
 }

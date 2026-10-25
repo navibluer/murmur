@@ -28,4 +28,5 @@ public struct WebhookEvent: Decodable, Sendable {
     public let source: Source
     public let deliveryContext: DeliveryContext
     public let message: Message?
+    public let timestamp: Int64?
 }

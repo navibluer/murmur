@@ -30,11 +30,12 @@ public struct Config: Sendable {
     public var claudeModel: String
     public var port: Int
     public var anthropicWorkspaceID: String?
+    public var recordsPath: String
 
     public init(
         lineChannelSecret: String, lineChannelAccessToken: String, anthropicAPIKey: String,
         allowedUserIDs: Set<String> = [], claudeModel: String = "claude-sonnet-5-5", port: Int = 47821,
-        anthropicWorkspaceID: String? = nil
+        anthropicWorkspaceID: String? = nil, recordsPath: String = RecordStoreDefaults.defaultPath
     ) {
         self.lineChannelSecret = lineChannelSecret
         self.lineChannelAccessToken = lineChannelAccessToken
@@ -43,6 +44,7 @@ public struct Config: Sendable {
         self.claudeModel = claudeModel
         self.port = port
         self.anthropicWorkspaceID = anthropicWorkspaceID
+        self.recordsPath = recordsPath
     }
 
     public static func load(env: [String: String]) throws -> Config {
@@ -61,6 +63,7 @@ public struct Config: Sendable {
             lineChannelAccessToken: try required("LINE_CHANNEL_ACCESS_TOKEN"),
             anthropicAPIKey: try required("ANTHROPIC_API_KEY"),
             allowedUserIDs: Set(ids), claudeModel: model, port: port,
-            anthropicWorkspaceID: env["ANTHROPIC_WORKSPACE_ID"].flatMap { $0.isEmpty ? nil : $0 })
+            anthropicWorkspaceID: env["ANTHROPIC_WORKSPACE_ID"].flatMap { $0.isEmpty ? nil : $0 },
+            recordsPath: env["RECORDS_PATH"].flatMap { $0.isEmpty ? nil : $0 } ?? RecordStoreDefaults.defaultPath)
     }
 }

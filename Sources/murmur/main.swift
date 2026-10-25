@@ -22,7 +22,8 @@ if args.count >= 2, args[1] == "serve" {
             line: LineClient(accessToken: config.lineChannelAccessToken),
             transcriber: AppleTranscriber(),
             analyzer: ClaudeAnalyzer(
-                apiKey: config.anthropicAPIKey, model: config.claudeModel, workspaceID: config.anthropicWorkspaceID))
+                apiKey: config.anthropicAPIKey, model: config.claudeModel, workspaceID: config.anthropicWorkspaceID),
+            store: CSVRecordStore(url: URL(fileURLWithPath: (config.recordsPath as NSString).expandingTildeInPath)))
         err("murmur 監聽 127.0.0.1:\(config.port)（POST /webhook、GET /health）")
         try await buildApplication(config: config, pipeline: pipeline).runService()
     } catch {
@@ -56,7 +57,8 @@ do {
         err(String(format: "transcribe: %.1fs", t1))
     } else {
         let t2Start = Date()
-        let analysis = try await ClaudeAnalyzer(apiKey: key, model: model, workspaceID: env["ANTHROPIC_WORKSPACE_ID"]).analyze(transcript: text)
+        let analysis = try await ClaudeAnalyzer(apiKey: key, model: model, workspaceID: env["ANTHROPIC_WORKSPACE_ID"]).analyze(
+            transcript: text, categories: RecordStoreDefaults.seedCategories)
         let t2 = Date().timeIntervalSince(t2Start)
         for m in MessageFormatter.format(analysis) {
             print(m)

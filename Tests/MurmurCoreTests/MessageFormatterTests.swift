@@ -4,13 +4,14 @@ import Testing
 @Suite struct MessageFormatterTests {
     let sample = Analysis(
         polished: "潤飾後的逐字稿", summary: "- 重點一\n- 重點二", sentiment: "整體平靜",
-        replies: ["好的，我知道了", "晚點回你"])
+        replies: ["好的，我知道了", "晚點回你"], category: "家庭生活")
 
     @Test func producesFourMessagesInOrder() {
         let m = MessageFormatter.format(sample)
         #expect(m.count == 4)
         let d = "━━━━━━━━━━"
-        #expect(m[0] == "💡【重點整理】\n\(d)\n- 重點一\n- 重點二")
+        #expect(m[0] == "💡【重點整理】\n\(d)\n🏷️ 分類：家庭生活\n\n- 重點一\n- 重點二")
+        #expect(m[0].contains("🏷️ 分類："))
         #expect(m[1] == "🎙️【逐字稿】\n\(d)\n潤飾後的逐字稿")
         #expect(m[2] == "🌡️【情緒分析】\n\(d)\n整體平靜")
         #expect(m[3].hasPrefix("🪄【回覆建議】\n\(d)\n1. "))

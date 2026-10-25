@@ -2,3 +2,4 @@
 .swiftpm/
 .env
 .DS_Store
+data/

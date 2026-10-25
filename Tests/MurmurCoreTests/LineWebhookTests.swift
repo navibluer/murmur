@@ -16,6 +16,7 @@ import Testing
         #expect(e.message?.id == "325708")
         #expect(e.source.userId == "U4af4980629")
         #expect(e.deliveryContext.isRedelivery == false)
+        #expect(e.timestamp == 1692251666727)
         #expect(e.replyToken == "38ef843bde154d9b91c21320ffd17a0f")
     }
 

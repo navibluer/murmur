@@ -21,7 +21,7 @@ public enum MessageFormatter {
             replies = cleaned.enumerated().map { "\($0.offset + 1). \($0.element)" }.joined(separator: "\n\n")
         }
         return [
-            truncate(header(summaryHeader) + orNone(a.summary)),
+            truncate(header(summaryHeader) + "🏷️ 分類：\(orNone(a.category))\n\n" + orNone(a.summary)),
             truncate(header(transcriptHeader) + orNone(a.polished)),
             truncate(header(sentimentHeader) + orNone(a.sentiment)),
             truncate(header(repliesHeader) + replies),

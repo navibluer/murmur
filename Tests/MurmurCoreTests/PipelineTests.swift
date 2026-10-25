@@ -61,10 +61,28 @@ final class FakeTranscriber: Transcriber, @unchecked Sendable {
 final class FakeAnalyzer: Analyzer, @unchecked Sendable {
     let count = Box(0)
     var error: Error?
-    func analyze(transcript: String) async throws -> Analysis {
+    let seenCategories = Box<[[String]]>([])
+    func analyze(transcript: String, categories: [String]) async throws -> Analysis {
         count.value += 1
+        seenCategories.value.append(categories)
         if let error { throw error }
-        return Analysis(polished: "p", summary: "s", sentiment: "x", replies: ["a"])
+        return Analysis(polished: "p", summary: "s", sentiment: "x", replies: ["a"], category: "家庭生活")
+    }
+}
+
+final class FakeStore: RecordStore, @unchecked Sendable {
+    let records = Box<[Record]>([])
+    var cats = ["家庭生活", "自訂"]
+    var appendError: Error?
+    var findError: Error?
+    func categories() throws -> [String] { cats }
+    func find(fingerprint: String) throws -> Record? {
+        if let findError { throw findError }
+        return records.value.first { $0.fingerprint == fingerprint }
+    }
+    func append(_ r: Record) throws {
+        if let appendError { throw appendError }
+        records.value.append(r)
     }
 }
 
@@ -74,6 +92,7 @@ struct Boom: Error {}
     let line = FakeLine()
     let tr = FakeTranscriber()
     let an = FakeAnalyzer()
+    let store = FakeStore()
     let start = ContinuousClock.now
     let offset = Box<Duration>(.zero)
     let dir = FileManager.default.temporaryDirectory.appendingPathComponent("pipe-\(UUID().uuidString)")
@@ -83,12 +102,12 @@ struct Boom: Error {}
         let s = start, o = offset
         return Pipeline(
             config: Config(lineChannelSecret: "s", lineChannelAccessToken: "t", anthropicAPIKey: "k", allowedUserIDs: allowed),
-            line: line, transcriber: tr, analyzer: an, now: { s + o.value }, tempDir: dir)
+            line: line, transcriber: tr, analyzer: an, store: store, now: { s + o.value }, tempDir: dir)
     }
 
     func event(id: String = "e1", type: String = "message", source: String = "user", user: String = "U1",
                msg: String = #"{"id":"m1","type":"audio","duration":1000,"contentProvider":{"type":"line"}}"#) throws -> WebhookEvent {
-        let json = #"{"type":"\#(type)","webhookEventId":"\#(id)","replyToken":"rt","source":{"type":"\#(source)","userId":"\#(user)"},"deliveryContext":{"isRedelivery":false},"message":\#(msg)}"#
+        let json = #"{"type":"\#(type)","webhookEventId":"\#(id)","replyToken":"rt","source":{"type":"\#(source)","userId":"\#(user)"},"deliveryContext":{"isRedelivery":false},"timestamp":1692251666727,"message":\#(msg)}"#
         return try JSONDecoder().decode(WebhookEvent.self, from: Data(json.utf8))
     }
 
@@ -243,6 +262,52 @@ struct Boom: Error {}
     @Test func fallbackShortTranscript() {
         let t = Pipeline.fallbackTexts(transcript: "短")
         #expect(t == ["分析失敗，以下是逐字稿原文：", "短"])
+    }
+
+    @Test func normalPathAppendsRecord() async throws {
+        let p = make()
+        await p.handle(try event(), receivedAt: start)
+        let r = try #require(store.records.value.first)
+        #expect(store.records.value.count == 1)
+        #expect(r.fingerprint == Record.fingerprint(of: "你好"))
+        #expect(r.analysis.category == "家庭生活")
+        #expect(r.time == Record.formatTime(milliseconds: 1_692_251_666_727))
+        #expect(an.seenCategories.value == [["家庭生活", "自訂"]])
+    }
+
+    @Test func duplicateFingerprintSkipsAnalyzerButReplies() async throws {
+        let cached = Analysis(polished: "舊逐字稿", summary: "舊重點", sentiment: "舊", replies: ["舊回覆"], category: "舊分類")
+        store.records.value = [Record(time: "2020-01-01 00:00", fingerprint: Record.fingerprint(of: "你好"), analysis: cached)]
+        let p = make()
+        await p.handle(try event(), receivedAt: start)
+        #expect(an.count.value == 0)
+        #expect(store.records.value.count == 1)
+        let msgs = try #require(line.replies.value.first)
+        #expect(msgs.count == 4)
+        #expect(msgs[0].contains("🏷️ 分類：舊分類") && msgs[0].contains("舊重點"))
+    }
+
+    @Test func storeAppendFailureStillReplies() async throws {
+        store.appendError = Boom()
+        let p = make()
+        await p.handle(try event(), receivedAt: start)
+        #expect(line.replies.value.first?.count == 4)
+    }
+
+    @Test func storeReadFailureTreatedAsMissingWithSeedCategories() async throws {
+        store.findError = Boom()
+        let p = make()
+        await p.handle(try event(), receivedAt: start)
+        #expect(an.count.value == 1)
+        #expect(line.replies.value.first?.count == 4)
+    }
+
+    @Test func analyzerFailureWritesNoRecord() async throws {
+        an.error = Boom()
+        let p = make()
+        await p.handle(try event(), receivedAt: start)
+        #expect(store.records.value.isEmpty)
+        #expect(line.replies.value.first?[0] == "分析失敗，以下是逐字稿原文：")
     }
 
     @Test func fileExtensions() {

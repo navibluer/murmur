@@ -19,6 +19,7 @@ public actor Pipeline {
     private let line: LineAPI
     private let transcriber: Transcriber
     private let analyzer: Analyzer
+    private let store: RecordStore?
     private let now: @Sendable () -> ContinuousClock.Instant
     private let tempDir: URL
     private var seen: Set<String> = []
@@ -26,13 +27,14 @@ public actor Pipeline {
     private let seenLimit = 1000
     private var tail: Task<Void, Never>?
 
-    public init(config: Config, line: LineAPI, transcriber: Transcriber, analyzer: Analyzer,
+    public init(config: Config, line: LineAPI, transcriber: Transcriber, analyzer: Analyzer, store: RecordStore? = nil,
                 now: @escaping @Sendable () -> ContinuousClock.Instant = { .now },
                 tempDir: URL = FileManager.default.temporaryDirectory) {
         self.config = config
         self.line = line
         self.transcriber = transcriber
         self.analyzer = analyzer
+        self.store = store
         self.now = now
         // 專屬子目錄：啟動時整個清掉，避免上次程序中斷殘留的音檔
         let audioDir = tempDir.appendingPathComponent("murmur-audio", isDirectory: true)
@@ -116,12 +118,36 @@ public actor Pipeline {
             return
         }
 
+        let fingerprint = Record.fingerprint(of: transcript)
+        var cached: Record?
+        if let store {
+            do { cached = try store.find(fingerprint: fingerprint) }
+            catch { print("紀錄讀取失敗: \(error)") }
+        }
+
         let texts: [String]
-        do {
-            texts = MessageFormatter.format(try await analyzer.analyze(transcript: transcript))
-        } catch {
-            print("分析失敗：\(error)")
-            texts = Self.fallbackTexts(transcript: transcript)
+        if let cached {
+            print("[\(message.id)] 重複語音，使用 \(cached.time) 的紀錄")
+            texts = MessageFormatter.format(cached.analysis)
+        } else {
+            do {
+                var categories = RecordStoreDefaults.seedCategories
+                if let store {
+                    do { categories = try store.categories() }
+                    catch { print("紀錄讀取失敗: \(error)") }
+                }
+                let analysis = try await analyzer.analyze(transcript: transcript, categories: categories)
+                if let store {
+                    let time = Record.formatTime(
+                        milliseconds: event.timestamp ?? Int64(Date().timeIntervalSince1970 * 1000))
+                    do { try store.append(Record(time: time, fingerprint: fingerprint, analysis: analysis)) }
+                    catch { print("紀錄寫入失敗: \(error)") }
+                }
+                texts = MessageFormatter.format(analysis)
+            } catch {
+                print("分析失敗：\(error)")
+                texts = Self.fallbackTexts(transcript: transcript)
+            }
         }
         lap("analyze")
 
