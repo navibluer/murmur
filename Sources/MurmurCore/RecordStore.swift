@@ -156,14 +156,14 @@ public final class CSVRecordStore: RecordStore, @unchecked Sendable {
         let headerLine = CSV.encode(Self.header)
         var existing = Data()
         if fm.fileExists(atPath: url.path) {
-            existing = (try? Data(contentsOf: url)) ?? Data()
+            existing = try Data(contentsOf: url)  // 讀不到就丟錯，不可當成空檔而覆寫歷史紀錄
         } else {
             try fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         }
         let body = existing.starts(with: bom) ? existing.dropFirst(3) : existing[...]
         if body.isEmpty {
             // 不存在、0 bytes 或只有 BOM：重寫 BOM + 表頭 + 此列
-            try (bom + Data((headerLine + row).utf8)).write(to: url)
+            try (bom + Data((headerLine + row).utf8)).write(to: url, options: .atomic)
             return
         }
         let text = String(decoding: body, as: UTF8.self)
@@ -181,7 +181,7 @@ public final class CSVRecordStore: RecordStore, @unchecked Sendable {
             try h.write(contentsOf: Data((closer + row).utf8))
         } else {
             // 缺表頭：整檔重寫為 BOM + 表頭 + 原內容 + 收尾 + 新列
-            try (bom + Data(headerLine.utf8) + body + Data((closer + row).utf8)).write(to: url)
+            try (bom + Data(headerLine.utf8) + body + Data((closer + row).utf8)).write(to: url, options: .atomic)
         }
     }
 

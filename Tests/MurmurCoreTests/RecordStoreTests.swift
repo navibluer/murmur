@@ -115,6 +115,19 @@ import Testing
         #expect(try store.find(fingerprint: "old") != nil && store.find(fingerprint: "new") != nil)
     }
 
+    @Test func unreadableFileIsNotOverwritten() throws {
+        let store = CSVRecordStore(url: url)
+        try store.append(Record(time: "2026-01-02 03:04", fingerprint: "old", analysis: analysis()))
+        let before = try Data(contentsOf: url)
+        try FileManager.default.setAttributes([.posixPermissions: 0o200], ofItemAtPath: url.path)  // 只能寫、不能讀
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: url.path) }
+        #expect(throws: (any Error).self) {
+            try store.append(Record(time: "2026-01-02 03:05", fingerprint: "new", analysis: analysis()))
+        }
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: url.path)
+        #expect(try Data(contentsOf: url) == before)
+    }
+
     @Test func emptyOrBOMOnlyFileGetsHeader() throws {
         for initial in [Data(), Data([0xEF, 0xBB, 0xBF])] {
             try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
