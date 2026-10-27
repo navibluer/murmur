@@ -201,7 +201,7 @@ final class StubProtocol: URLProtocol, @unchecked Sendable {
         let body = try #require(StubProtocol.lastBody)
         let obj = try #require(try JSONSerialization.jsonObject(with: body) as? [String: Any])
         let system = try #require(obj["system"] as? String)
-        #expect(system.contains("【安全規則") && system.contains("1925"))
+        #expect(!system.contains("【安全規則") && !system.contains("1925") && system.contains("不要加入安全提醒"))
         #expect(!system.contains("summary"))
         let tool = try #require((obj["tools"] as? [[String: Any]])?.first)
         let schema = try #require(tool["input_schema"] as? [String: Any])
