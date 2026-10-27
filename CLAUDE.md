@@ -18,7 +18,8 @@ swift run murmur transcribe <file>   # speech-to-text only
 swift run murmur analyze <file>      # transcribe + Claude analysis (needs ANTHROPIC_API_KEY)
 swift run murmur serve               # LINE webhook server, 127.0.0.1:47821
 swift run murmur backfill <id>...    # re-download old LINE voice messages by message ID and save to the CSV (no LINE messages sent)
-scripts/murmurctl install|status|logs|restart|uninstall   # launchd background service (serve + ngrok), logs in ~/Library/Logs/murmur
+scripts/murmurctl setup                                    # interactive wizard: writes .env, checks tools
+scripts/murmurctl install|status|logs|restart|uninstall   # launchd background service (serve + ngrok or cloudflared tunnel, TUNNEL in .env), logs in ~/Library/Logs/murmur
 ```
 
 Config comes from `.env` in the cwd merged with process env (env wins); see `.env.example`. Never print `.env` values.

@@ -1,6 +1,8 @@
 #!/bin/bash
-# 管理 Murmur 背景服務（launchd LaunchAgent）：murmur serve 與 ngrok tunnel。
-# 用法：scripts/murmurctl install|uninstall|start|stop|restart|status|logs [serve|ngrok] [-n 行數]
+# 管理 Murmur 背景服務（launchd LaunchAgent）：murmur serve 與 tunnel（ngrok 或 Cloudflare Tunnel）。
+# 用法：scripts/murmurctl setup|install|uninstall|start|stop|restart|status|logs [serve|tunnel|ngrok|all] [-n 行數]
+# 測試用環境變數：MURMUR_ENV_FILE（指定 .env 路徑）、MURMUR_CONTEXT_FILE（setup 的 context.md 路徑）、
+#                MURMURCTL_DRY_RUN=1（install 只印出將寫入的 plist 路徑與 ProgramArguments）
 set -euo pipefail
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
@@ -9,26 +11,54 @@ LOGS="$HOME/Library/Logs/murmur"
 DOMAIN="gui/$(id -u)"
 SERVE_LABEL="com.murmur.serve"
 NGROK_LABEL="com.murmur.ngrok"
+CLOUDFLARED_LABEL="com.murmur.cloudflared"
+ENV_FILE="${MURMUR_ENV_FILE:-$REPO/.env}"
 BIN="$REPO/.build/release/murmur"
+
+# 從 .env 讀單一變數（去掉空白與引號）；不存在則回傳空字串
+env_get() {
+  grep -E "^$1=" "$ENV_FILE" 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '[:space:]"'"'" || true
+}
+
+# 環境變數優先，否則讀 .env
+cfg() {
+  local v="${!1:-}"
+  if [ -n "$v" ]; then echo "$v"; else env_get "$1"; fi
+}
 
 port() {
   local p
-  p="$(grep -E '^PORT=' "$REPO/.env" 2>/dev/null | tail -1 | cut -d= -f2 | tr -d '[:space:]"' || true)"
+  p="$(env_get PORT)"
   echo "${p:-47821}"
 }
 
-# NGROK_URL：環境變數優先，否則讀 .env；都沒有則回傳空字串
-ngrok_url() {
-  if [ -n "${NGROK_URL:-}" ]; then echo "$NGROK_URL"; return; fi
-  grep -E '^NGROK_URL=' "$REPO/.env" 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '[:space:]"'"'" || true
+ngrok_url() { cfg NGROK_URL; }
+
+# TUNNEL：ngrok（預設）或 cloudflared
+tunnel_kind() {
+  local t
+  t="$(cfg TUNNEL)"
+  case "${t:-ngrok}" in
+    ngrok|cloudflared) echo "${t:-ngrok}" ;;
+    *) echo "TUNNEL 只能是 ngrok 或 cloudflared（目前為 ${t}）" >&2; exit 1 ;;
+  esac
 }
+tunnel_label() { if [ "$(tunnel_kind)" = cloudflared ]; then echo "$CLOUDFLARED_LABEL"; else echo "$NGROK_LABEL"; fi; }
+tunnel_log() { if [ "$(tunnel_kind)" = cloudflared ]; then echo tunnel; else echo ngrok; fi; }
 
 ngrok_bin() { command -v ngrok || echo /opt/homebrew/bin/ngrok; }
+cloudflared_bin() { command -v cloudflared || echo /opt/homebrew/bin/cloudflared; }
 
 write_plist() { # label, log name, program args...
   local label="$1" log="$2"; shift 2
   local args=""
   for a in "$@"; do args+="    <string>$a</string>"$'\n'; done
+  if [ -n "${MURMURCTL_DRY_RUN:-}" ]; then
+    echo "[dry-run] plist：$AGENTS/$label.plist（log：$LOGS/$log.log）"
+    echo "[dry-run] ProgramArguments："
+    printf '  %s\n' "$@"
+    return 0
+  fi
   cat > "$AGENTS/$label.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -62,40 +92,166 @@ load() {
   launchctl bootstrap "$DOMAIN" "$AGENTS/$1.plist"
 }
 
+# ---------- setup 精靈 ----------
+CONTEXT_FILE_PATH="${MURMUR_CONTEXT_FILE:-$REPO/context.md}"
+SETUP_TMP=""
+cleanup_setup() { [ -z "$SETUP_TMP" ] || rm -f "$SETUP_TMP" "$SETUP_TMP.new"; }
+
+# 在暫存檔中設定 KEY=VALUE（取代第一個未註解的 KEY= 行，沒有就附加），值不經 shell 展開
+set_kv() {
+  KV_KEY="$1" KV_VAL="$2" awk '
+    BEGIN { k = ENVIRON["KV_KEY"]; v = ENVIRON["KV_VAL"]; done = 0 }
+    index($0, k "=") == 1 && !done { print k "=" v; done = 1; next }
+    { print }
+    END { if (!done) print k "=" v }
+  ' "$SETUP_TMP" > "$SETUP_TMP.new"
+  mv "$SETUP_TMP.new" "$SETUP_TMP"
+}
+
+# ask KEY 說明 [secret]：直接 Enter 保留原值；絕不印出既有值
+ask() {
+  local key="$1" help="$2" secret="${3:-}" status val=""
+  if [ -n "$(env_get "$key")" ]; then status="目前已設定，Enter 保留"; else status="未設定"; fi
+  echo
+  echo "$help"
+  if [ -n "$secret" ]; then
+    read -r -s -p "${key}（${status}）：" val || true
+    [ -t 0 ] && echo
+  else
+    read -r -p "${key}（${status}）：" val || true
+  fi
+  if [ -n "$val" ]; then
+    set_kv "$key" "$val"
+    ASKED_NEW="$val"
+  else
+    ASKED_NEW=""
+  fi
+}
+
+setup() {
+  local fresh=1 ans tunnel cur new_url=""
+  if [ -f "$ENV_FILE" ]; then
+    fresh=0
+    read -r -p "已有 .env，要逐項更新嗎？(y/N) " ans || true
+    case "$ans" in y|Y|yes|YES) ;; *) echo "未變更。"; return 0 ;; esac
+  fi
+
+  mkdir -p "$(dirname "$ENV_FILE")"
+  SETUP_TMP="$(umask 077; mktemp "$ENV_FILE.XXXXXX")"
+  trap cleanup_setup EXIT
+  if [ "$fresh" = 1 ] && [ -f "$REPO/.env.example" ]; then cat "$REPO/.env.example" > "$SETUP_TMP"; else cat "$ENV_FILE" > "$SETUP_TMP"; fi
+
+  echo "Murmur 設定精靈（密碼類輸入不會顯示；直接按 Enter 保留原值）"
+  ask LINE_CHANNEL_SECRET "LINE Developers Console → 你的 channel → Basic settings → Channel secret" secret
+  ask LINE_CHANNEL_ACCESS_TOKEN "LINE Developers Console → Messaging API 分頁 → Channel access token (long-lived)" secret
+  ask ANTHROPIC_API_KEY "console.anthropic.com → API Keys → 建立並複製 key" secret
+  ask ALLOWED_USER_IDS "允許使用的 LINE userId，多個用逗號分隔。留空的話，之後傳訊給 bot 從 log 取得 userId" ""
+
+  cur="$(env_get TUNNEL)"; cur="${cur:-ngrok}"
+  while :; do
+    echo
+    echo "對外網址的 tunnel：ngrok（需固定網域）或 cloudflared（Cloudflare Tunnel，需自己的網域）"
+    read -r -p "TUNNEL（ngrok／cloudflared，預設 ${cur}）：" tunnel || true
+    tunnel="${tunnel:-$cur}"
+    case "$tunnel" in ngrok|cloudflared) break ;; *) echo "請輸入 ngrok 或 cloudflared。" ;; esac
+  done
+  set_kv TUNNEL "$tunnel"
+
+  if [ "$tunnel" = ngrok ]; then
+    ask NGROK_URL "ngrok Dashboard → Domains 的固定網域，例如 https://xxx.ngrok-free.app"
+    new_url="$ASKED_NEW"
+  else
+    ask CLOUDFLARED_TUNNEL "先用 cloudflared tunnel create 建好的 tunnel 名稱（做法見 README「Cloudflare Tunnel」）"
+    ask PUBLIC_URL "tunnel 對外的網址，例如 https://murmur.example.com（cloudflared tunnel route dns 指向的主機名）"
+    new_url="$ASKED_NEW"
+  fi
+
+  chmod 600 "$SETUP_TMP"
+  mv "$SETUP_TMP" "$ENV_FILE"
+  SETUP_TMP=""
+  echo
+  echo "已寫入 ${ENV_FILE}（權限 600）"
+
+  if [ ! -f "$CONTEXT_FILE_PATH" ] && [ -f "$REPO/context.example.md" ]; then
+    echo
+    read -r -p "尚無 context.md（個人情境檔），要從 context.example.md 複製一份嗎？(Y/n) " ans || true
+    case "$ans" in n|N|no|NO) ;; *) cp "$REPO/context.example.md" "$CONTEXT_FILE_PATH"; echo "已建立 ${CONTEXT_FILE_PATH}，請自行編輯" ;; esac
+  fi
+
+  echo
+  echo "環境檢查："
+  if command -v swift >/dev/null 2>&1; then echo "  swift：$(swift --version 2>&1 | head -1)"; else echo "  swift：找不到（請安裝 Xcode 或 Command Line Tools）"; fi
+  if command -v "$tunnel" >/dev/null 2>&1; then echo "  ${tunnel}：已安裝"; else echo "  ${tunnel}：找不到，請執行 brew install $tunnel"; fi
+
+  echo
+  echo "下一步："
+  echo "  1. scripts/murmurctl install"
+  echo "  2. LINE 後台 Messaging API 的 Webhook URL 填 ${new_url:-<你設定的網址>}/webhook，按 Verify 後開啟 Use webhook"
+  [ -n "$(env_get ALLOWED_USER_IDS)" ] || echo "  3. 傳訊給 bot，從 scripts/murmurctl logs 取得 userId，填進 .env 的 ALLOWED_USER_IDS 後 restart"
+}
+
 case "${1:-}" in
+  setup)
+    setup
+    ;;
   install)
-    NGROK_URL="$(ngrok_url)"
-    if [ -z "$NGROK_URL" ]; then
-      echo "請在 .env 設定 NGROK_URL（例如 https://xxx.ngrok-free.app）" >&2
-      exit 1
+    KIND="$(tunnel_kind)"
+    if [ "$KIND" = cloudflared ]; then
+      CF_TUNNEL="$(cfg CLOUDFLARED_TUNNEL)"
+      if [ -z "$CF_TUNNEL" ]; then
+        echo "請在 .env 設定 CLOUDFLARED_TUNNEL（cloudflared tunnel create 建立的名稱）與 PUBLIC_URL" >&2
+        exit 1
+      fi
+      OTHER_LABEL="$NGROK_LABEL"
+    else
+      NGROK_URL="$(ngrok_url)"
+      if [ -z "$NGROK_URL" ]; then
+        echo "請在 .env 設定 NGROK_URL（例如 https://xxx.ngrok-free.app）" >&2
+        exit 1
+      fi
+      OTHER_LABEL="$CLOUDFLARED_LABEL"
     fi
-    echo "建置 release 版本…"
-    (cd "$REPO" && swift build -c release 2>&1 | tail -1)
-    mkdir -p "$AGENTS" "$LOGS"
+    if [ -n "${MURMURCTL_DRY_RUN:-}" ]; then
+      echo "[dry-run] TUNNEL=$KIND"
+    else
+      echo "建置 release 版本…"
+      (cd "$REPO" && swift build -c release 2>&1 | tail -1)
+      mkdir -p "$AGENTS" "$LOGS"
+    fi
     write_plist "$SERVE_LABEL" serve "$BIN" serve
-    write_plist "$NGROK_LABEL" ngrok "$(ngrok_bin)" http "$(port)" --url "$NGROK_URL" --log stdout
-    for l in "$SERVE_LABEL" "$NGROK_LABEL"; do unload "$l"; load "$l"; done
-    echo "已安裝並啟動。之後登入就會自動執行。log：$LOGS"
+    if [ "$KIND" = cloudflared ]; then
+      write_plist "$CLOUDFLARED_LABEL" tunnel "$(cloudflared_bin)" tunnel run --url "http://localhost:$(port)" "$CF_TUNNEL"
+    else
+      write_plist "$NGROK_LABEL" ngrok "$(ngrok_bin)" http "$(port)" --url "$NGROK_URL" --log stdout
+    fi
+    if [ -n "${MURMURCTL_DRY_RUN:-}" ]; then
+      echo "[dry-run] 會卸載並刪除另一種 tunnel 的 agent：$AGENTS/$OTHER_LABEL.plist"
+      exit 0
+    fi
+    # 切換 tunnel 時，卸載並移除另一種 tunnel 的 agent
+    unload "$OTHER_LABEL"; rm -f "$AGENTS/$OTHER_LABEL.plist"
+    for l in "$SERVE_LABEL" "$(tunnel_label)"; do unload "$l"; load "$l"; done
+    echo "已安裝並啟動（tunnel：${KIND}）。之後登入就會自動執行。log：$LOGS"
     ;;
   uninstall)
-    for l in "$SERVE_LABEL" "$NGROK_LABEL"; do unload "$l"; rm -f "$AGENTS/$l.plist"; done
-    echo "已停止並移除自動啟動（log 保留在 $LOGS）"
+    for l in "$SERVE_LABEL" "$NGROK_LABEL" "$CLOUDFLARED_LABEL"; do unload "$l"; rm -f "$AGENTS/$l.plist"; done
+    echo "已停止並移除自動啟動（log 保留在 ${LOGS}）"
     ;;
   start)
-    for l in "$SERVE_LABEL" "$NGROK_LABEL"; do load "$l" 2>/dev/null || launchctl kickstart "$DOMAIN/$l"; done
+    for l in "$SERVE_LABEL" "$(tunnel_label)"; do load "$l" 2>/dev/null || launchctl kickstart "$DOMAIN/$l"; done
     ;;
   stop)
-    for l in "$SERVE_LABEL" "$NGROK_LABEL"; do unload "$l"; done
+    for l in "$SERVE_LABEL" "$(tunnel_label)"; do unload "$l"; done
     echo "已停止（下次登入仍會自動啟動；要永久停用請用 uninstall）"
     ;;
   restart)
     echo "重新建置…"
     (cd "$REPO" && swift build -c release 2>&1 | tail -1)
-    for l in "$SERVE_LABEL" "$NGROK_LABEL"; do launchctl kickstart -k "$DOMAIN/$l"; done
+    for l in "$SERVE_LABEL" "$(tunnel_label)"; do launchctl kickstart -k "$DOMAIN/$l"; done
     echo "已重啟"
     ;;
   status)
-    for l in "$SERVE_LABEL" "$NGROK_LABEL"; do
+    for l in "$SERVE_LABEL" "$(tunnel_label)"; do
       if info="$(launchctl print "$DOMAIN/$l" 2>/dev/null)"; then
         state="$(echo "$info" | awk -F'= ' '/^\tstate/{print $2; exit}')"
         pid="$(echo "$info" | awk -F'= ' '/^\tpid/{print $2; exit}')"
@@ -112,13 +268,14 @@ case "${1:-}" in
     while [ $# -gt 0 ]; do
       case "$1" in
         serve|ngrok) target="$1" ;;
+        tunnel|cloudflared) target="$(tunnel_log)" ;;
         all) target="all" ;;
         -n) lines="$2"; shift ;;
       esac
       shift
     done
     if [ "$target" = all ]; then
-      tail -n "$lines" -F "$LOGS/serve.log" "$LOGS/ngrok.log"
+      tail -n "$lines" -F "$LOGS/serve.log" "$LOGS/$(tunnel_log).log"
     else
       tail -n "$lines" -F "$LOGS/$target.log"
     fi
@@ -126,12 +283,13 @@ case "${1:-}" in
   *)
     cat <<EOF
 用法：scripts/murmurctl <指令>
+  setup       互動式設定精靈（寫入 .env、檢查環境）
   install     建置 release、安裝並啟動（開機登入自動執行）
   uninstall   停止並移除自動啟動
   start|stop  啟動／停止
   restart     重新建置並重啟（改完程式碼後用）
   status      顯示執行狀態與 health
-  logs [serve|ngrok|all] [-n 行數]   即時顯示 log（Ctrl+C 離開，服務不受影響）
+  logs [serve|tunnel|ngrok|all] [-n 行數]   即時顯示 log（tunnel 指向目前使用的那個；Ctrl+C 離開，服務不受影響）
 EOF
     ;;
 esac

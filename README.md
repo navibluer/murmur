@@ -19,11 +19,15 @@
 - **逐字稿**：會送到 Anthropic 的 Claude API 做分析，使用的是你自己的 API key。
 - **分析結果**：只存在自己電腦上的 CSV（`data/records.csv`）。
 
+### 費用
+
+分析使用你自己的 Claude API key，依 token 計費。實測短語音每次分析約 1,600～2,000 input tokens、150～2,100 output tokens；長語音、使用情境檔與分析結果不完整而重試時會更多。單價請見 Anthropic 官方定價頁（https://www.anthropic.com/pricing）。語音辨識在 macOS 上執行，不另外收費。
+
 ## 運作方式
 
 ```
 LINE（轉傳語音）
-  → ngrok（公開 HTTPS 網址）
+  → ngrok 或 Cloudflare Tunnel（公開 HTTPS 網址）
   → murmur serve（127.0.0.1:47821）
       1. 驗證 LINE 簽章、檢查白名單
       2. 下載音檔 → macOS SpeechAnalyzer 轉文字（zh-TW）
@@ -39,13 +43,23 @@ LINE（轉傳語音）
 ## 需求
 
 - macOS 26 以上（用到 `SpeechAnalyzer`），Swift 6.2
-- [ngrok](https://ngrok.com)：已登入，並有一個固定網域
+- [ngrok](https://ngrok.com)（已登入，並有一個固定網域）或 [Cloudflare Tunnel（cloudflared）](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/)（需要一個放在 Cloudflare 的網域），二選一
 - LINE 官方帳號，且已啟用 Messaging API
 - Claude API key
 
 ## 安裝
 
 ### 1. 設定 `.env`
+
+推薦用互動式精靈，它會逐項詢問、寫入 `.env`（權限 600）、檢查環境，並可順便建立 `context.md`：
+
+```sh
+scripts/murmurctl setup
+```
+
+密碼類輸入不會顯示在畫面上；已有 `.env` 時會逐項更新，直接按 Enter 保留原值，且不會印出既有的值。
+
+替代方式是手動編輯：
 
 ```sh
 cp .env.example .env
@@ -60,13 +74,36 @@ cp .env.example .env
 | `ANTHROPIC_WORKSPACE_ID` | 選填；API key 沒有綁定 workspace 時才需要 |
 | `ALLOWED_USER_IDS` | 允許使用的 LINE userId，多個用逗號分隔 |
 | `PORT` | 預設 `47821` |
-| `NGROK_URL` | `scripts/murmurctl install` 必填；你的 ngrok 固定網域，例如 `https://xxx.ngrok-free.app` |
+| `TUNNEL` | 選填；`ngrok`（預設）或 `cloudflared`，決定 `scripts/murmurctl install` 註冊哪一種 tunnel |
+| `NGROK_URL` | `TUNNEL=ngrok` 時 `install` 必填；你的 ngrok 固定網域，例如 `https://xxx.ngrok-free.app` |
+| `CLOUDFLARED_TUNNEL` | `TUNNEL=cloudflared` 時 `install` 必填；事先建好的具名 tunnel 名稱 |
+| `PUBLIC_URL` | `TUNNEL=cloudflared` 時填；tunnel 對外網址，例如 `https://murmur.example.com`（LINE Webhook URL 用） |
 | `RECORDS_PATH` | 選填；CSV 路徑，預設 `data/records.csv` |
 | `CONTEXT_FILE` | 選填；使用者情境檔路徑，預設 `context.md`（相對於執行目錄，支援 `~`） |
 | `SEED_CATEGORIES` | 選填；初始分類，逗號分隔，預設 `家庭生活,健康醫療,金錢財務,工作事業,閒聊問候` |
 | `SPEECH_LOCALE` | 選填；語音辨識語系，預設 `zh-TW`（簡轉繁只在 `zh` 開頭的語系套用） |
 
 `.env` 已列在 `.gitignore` 裡，不會被 commit。
+
+### Cloudflare Tunnel（ngrok 的替代方案）
+
+使用 Cloudflare Tunnel 時，先安裝 `brew install cloudflared`，再建立具名 tunnel 並把網域指過去（指令依 Cloudflare 官方文件，請以官方文件為準）：
+
+```sh
+cloudflared tunnel login
+cloudflared tunnel create <名稱>
+cloudflared tunnel route dns <名稱> <主機名>
+```
+
+然後在 `.env` 設定：
+
+```sh
+TUNNEL=cloudflared
+CLOUDFLARED_TUNNEL=<名稱>
+PUBLIC_URL=https://<主機名>
+```
+
+`scripts/murmurctl install` 會改註冊 `cloudflared tunnel run --url http://localhost:<PORT> <名稱>` 背景服務（log 為 `tunnel.log`），並把另一種 tunnel 的服務卸載。
 
 ### 2. LINE 後台
 
@@ -80,9 +117,9 @@ cp .env.example .env
 scripts/murmurctl install
 ```
 
-這個指令會建置 release 版，並把 `murmur serve` 和 ngrok 註冊成 launchd 背景服務：登入 macOS 後自動啟動，程式結束時自動重啟。
+這個指令會建置 release 版，並把 `murmur serve` 和 tunnel（ngrok 或 cloudflared）註冊成 launchd 背景服務：登入 macOS 後自動啟動，程式結束時自動重啟。
 
-ngrok 網域請寫在 `.env` 的 `NGROK_URL`（也可用環境變數 `NGROK_URL=https://<你的網域> scripts/murmurctl install` 臨時指定，環境變數優先）；兩者都沒有時 `install` 會報錯並結束。
+使用 ngrok 時，網域請寫在 `.env` 的 `NGROK_URL`（也可用環境變數 `NGROK_URL=https://<你的網域> scripts/murmurctl install` 臨時指定，環境變數優先）；兩者都沒有時 `install` 會報錯並結束。使用 Cloudflare Tunnel 時改設 `TUNNEL`、`CLOUDFLARED_TUNNEL`、`PUBLIC_URL`。
 
 ### 4. 連上 LINE
 
@@ -95,14 +132,14 @@ ngrok 網域請寫在 `.env` 的 `NGROK_URL`（也可用環境變數 `NGROK_URL=
 
 ```sh
 scripts/murmurctl status      # 服務狀態與 health check
-scripts/murmurctl logs        # 即時看 log（ngrok / all 可切換，-n 指定行數；Ctrl+C 離開，不影響服務）
+scripts/murmurctl logs        # 即時看 log（serve / tunnel / all 可切換，-n 指定行數；Ctrl+C 離開，不影響服務）
 scripts/murmurctl restart     # 改完程式碼後重新建置並重啟
 scripts/murmurctl stop        # 暫停（下次登入仍會自動啟動）
 scripts/murmurctl start       # 暫停後重新啟動
 scripts/murmurctl uninstall   # 移除自動啟動
 ```
 
-log 存在 `~/Library/Logs/murmur/` 底下的 `serve.log` 和 `ngrok.log`。
+log 存在 `~/Library/Logs/murmur/` 底下：`serve.log`，以及 tunnel 的 log（ngrok 為 `ngrok.log`，cloudflared 為 `tunnel.log`）。
 
 ## 分析紀錄（CSV）
 
@@ -176,6 +213,10 @@ swift run murmur serve                 # 在前景執行 webhook 伺服器
 
 ## 安全性
 
-- ngrok 只轉發 `127.0.0.1:47821`，對外只開放 `/webhook` 和 `/health` 兩個路徑。
+- tunnel（ngrok 或 cloudflared）只轉發 `127.0.0.1:47821`，對外只開放 `/webhook` 和 `/health` 兩個路徑。
 - webhook 用 Channel secret 驗證 HMAC-SHA256 簽章，簽章不對就回 401。請求內容上限 1MB。
-- 要保管好的機密有：`.env`（Channel secret、access token、API key），以及 ngrok 的 authtoken（存在 `~/Library/Application Support/ngrok/ngrok.yml`）。
+- 要保管好的機密有：`.env`（Channel secret、access token、API key），以及 ngrok 的 authtoken（存在 `~/Library/Application Support/ngrok/ngrok.yml`）或 cloudflared 的憑證（存在 `~/.cloudflared/`）。
+
+## 授權
+
+MIT License，見 [LICENSE](LICENSE)。
