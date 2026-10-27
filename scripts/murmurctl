@@ -49,8 +49,18 @@ $args  </array>
 EOF
 }
 
-load() { launchctl bootstrap "$DOMAIN" "$AGENTS/$1.plist"; }
-unload() { launchctl bootout "$DOMAIN/$1" 2>/dev/null || true; }
+# bootout 是非同步的：等服務真的卸載後才回傳，避免緊接著 bootstrap 失敗。
+unload() {
+  launchctl bootout "$DOMAIN/$1" 2>/dev/null || true
+  for _ in $(seq 1 50); do launchctl print "$DOMAIN/$1" >/dev/null 2>&1 || return 0; sleep 0.2; done
+}
+load() {
+  for _ in 1 2 3 4 5; do
+    launchctl bootstrap "$DOMAIN" "$AGENTS/$1.plist" 2>/dev/null && return 0
+    sleep 1
+  done
+  launchctl bootstrap "$DOMAIN" "$AGENTS/$1.plist"
+}
 
 case "${1:-}" in
   install)
