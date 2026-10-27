@@ -7,7 +7,7 @@ import Testing
     var url: URL { dir.appendingPathComponent("sub/records.csv") }
 
     func analysis(category: String = "家庭生活", polished: String = "你好") -> Analysis {
-        Analysis(polished: polished, summary: "- 重點", sentiment: "平靜", replies: ["好", "晚點回"], category: category)
+        Analysis(polished: polished, sentiment: "平靜", replies: [Reply(label: "簡短收到", text: "好"), Reply(label: "延後處理", text: "晚點回")], category: category)
     }
 
     @Test func newFileHasBOMAndHeader() throws {
@@ -16,22 +16,22 @@ import Testing
         let data = try Data(contentsOf: url)
         #expect(Array(data.prefix(3)) == [0xEF, 0xBB, 0xBF])
         let text = String(decoding: data.dropFirst(3), as: UTF8.self)
-        #expect(text.hasPrefix("時間,指紋,分類,重點整理,逐字稿,情緒分析,回覆建議\r\n"))
+        #expect(text.hasPrefix("時間,指紋,分類,逐字稿,情緒分析,回覆建議\r\n"))
         #expect(text.hasSuffix("\r\n"))
     }
 
     @Test func roundTripWithSpecialCharacters() throws {
         let store = CSVRecordStore(url: url)
         let a = Analysis(
-            polished: "他說：\"好\", 然後\n換行\r\n再一行", summary: "- a,b\n- \"c\"",
-            sentiment: "情緒, \"複雜\"", replies: ["1. 開頭像編號", "含\n換行的回覆"], category: "閒聊問候")
+            polished: "他說：\"好\", 然後\n換行\r\n再一行",
+            sentiment: "情緒, \"複雜\"",
+            replies: [Reply(label: "設立,界線", text: "1. 開頭像編號"), Reply(label: "明確\"拒絕\"", text: "含\n換行,和\"引號\"的回覆")], category: "閒聊問候")
         let r = Record(time: "2026-01-02 03:04", fingerprint: "f1", analysis: a)
         try store.append(r)
         try store.append(Record(time: "2026-01-02 03:05", fingerprint: "f2", analysis: analysis()))
         let back = try #require(try CSVRecordStore(url: url).find(fingerprint: "f1"))
         #expect(back.time == r.time)
         #expect(back.analysis.category == "閒聊問候")
-        #expect(back.analysis.summary == a.summary)
         #expect(back.analysis.sentiment == a.sentiment)
         #expect(back.analysis.replies == a.replies)
         // \r\n 在逐字稿內會被保留（解析器以 unicodeScalars 處理）
@@ -106,7 +106,7 @@ import Testing
 
     @Test func appendAfterMissingTrailingNewline() throws {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        let row = CSV.encode(["t", "old", "家庭生活", "s", "p", "x", "1. r"])
+        let row = CSV.encode(["t", "old", "家庭生活", "p", "x", "1. r"])
         var data = Data([0xEF, 0xBB, 0xBF])
         data.append(Data((CSV.encode(CSVRecordStore.header) + row.dropLast(2)).utf8))
         try data.write(to: url)
@@ -138,20 +138,87 @@ import Testing
             let data = try Data(contentsOf: url)
             #expect(Array(data.prefix(3)) == [0xEF, 0xBB, 0xBF])
             let text = String(decoding: data.dropFirst(3), as: UTF8.self)
-            #expect(text.hasPrefix("時間,指紋,分類,重點整理,逐字稿,情緒分析,回覆建議\r\n"))
+            #expect(text.hasPrefix("時間,指紋,分類,逐字稿,情緒分析,回覆建議\r\n"))
             try FileManager.default.removeItem(at: url)
         }
     }
 
     @Test func formulaLikeFieldsAreEscapedAndRoundTrip() throws {
         let store = CSVRecordStore(url: url)
-        let a = Analysis(polished: "=SUM(1)", summary: "- 重點\n- 二", sentiment: "+1", replies: ["@某人"], category: "家庭生活")
+        let a = Analysis(polished: "=SUM(1)\n二", sentiment: "+1", replies: [Reply(label: "-標籤", text: "@某人")], category: "家庭生活")
         try store.append(Record(time: "t", fingerprint: "f", analysis: a))
         let raw = String(decoding: try Data(contentsOf: url), as: UTF8.self)
-        #expect(raw.contains(",\" - 重點\n- 二\","))
-        #expect(raw.contains(", =SUM(1),"))
+        #expect(raw.contains(",\" =SUM(1)\n二\","))
+        #expect(raw.contains(",\"1. 【-標籤】@某人\"") || raw.contains(",1. 【-標籤】@某人"))
         let back = try #require(try store.find(fingerprint: "f"))
-        #expect(back.analysis.summary == a.summary && back.analysis.polished == a.polished)
+        #expect(back.analysis.replies == a.replies && back.analysis.polished == a.polished)
         #expect(back.analysis.sentiment == "+1")
+    }
+
+    // MARK: 舊 7 欄格式遷移
+
+    func writeLegacy(_ rows: [[String]]) throws -> Data {
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        var s = CSV.encode(CSVRecordStore.legacyHeader)
+        for r in rows { s += CSV.encode(r) }
+        let data = Data([0xEF, 0xBB, 0xBF]) + Data(s.utf8)
+        try data.write(to: url)
+        return data
+    }
+
+    let legacyRows = [
+        ["2026-01-01 10:00", "old1", "金錢財務", "- 重點, 一", "逐字稿一\n第二行", "情緒, \"複雜\"", "1. 好的\n2. 含\n換行的回覆"],
+        ["2026-01-01 10:01", "old2", "家庭生活", "- 重點二", "逐字稿二", "平靜", "1. 晚點回"],
+    ]
+
+    @Test func legacyRowsReadWithEmptyLabels() throws {
+        _ = try writeLegacy(legacyRows)
+        let r = try #require(try CSVRecordStore(url: url).find(fingerprint: "old1"))
+        #expect(r.analysis.polished == "逐字稿一\n第二行")
+        #expect(r.analysis.sentiment == "情緒, \"複雜\"")
+        #expect(r.analysis.category == "金錢財務")
+        #expect(r.analysis.replies == [Reply(label: "", text: "好的"), Reply(label: "", text: "含\n換行的回覆")])
+    }
+
+    @Test func appendMigratesLegacyFileWithBackup() throws {
+        let original = try writeLegacy(legacyRows)
+        let store = CSVRecordStore(url: url)
+        try store.append(Record(time: "2026-02-02 02:02", fingerprint: "new1", analysis: analysis()))
+        let bak = url.deletingLastPathComponent().appendingPathComponent("records.csv.bak")
+        #expect(try Data(contentsOf: bak) == original)
+        let data = try Data(contentsOf: url)
+        #expect(Array(data.prefix(3)) == [0xEF, 0xBB, 0xBF])
+        let text = String(decoding: data.dropFirst(3), as: UTF8.self)
+        #expect(text.hasPrefix("時間,指紋,分類,逐字稿,情緒分析,回覆建議\r\n"))
+        let rows = try CSV.parse(text)
+        #expect(rows.count == 4 && rows.allSatisfy { $0.count == 6 })
+        let o1 = try #require(try store.find(fingerprint: "old1"))
+        #expect(o1.time == "2026-01-01 10:00" && o1.analysis.category == "金錢財務")
+        #expect(o1.analysis.polished == "逐字稿一\n第二行" && o1.analysis.sentiment == "情緒, \"複雜\"")
+        #expect(o1.analysis.replies.map(\.text) == ["好的", "含\n換行的回覆"])
+        #expect(try store.find(fingerprint: "old2")?.analysis.polished == "逐字稿二")
+        #expect(try store.find(fingerprint: "new1")?.analysis.replies.first?.label == "簡短收到")
+        // 再次 append 不再遷移，也不產生新的備份
+        try store.append(Record(time: "t", fingerprint: "new2", analysis: analysis()))
+        let files = try FileManager.default.contentsOfDirectory(atPath: url.deletingLastPathComponent().path)
+        #expect(files.sorted() == ["records.csv", "records.csv.bak"])
+    }
+
+    @Test func migrationDoesNotOverwriteExistingBackup() throws {
+        _ = try writeLegacy(legacyRows)
+        let bak = url.deletingLastPathComponent().appendingPathComponent("records.csv.bak")
+        try Data("舊備份".utf8).write(to: bak)
+        try CSVRecordStore(url: url).append(Record(time: "t", fingerprint: "n", analysis: analysis()))
+        #expect(try Data(contentsOf: bak) == Data("舊備份".utf8))
+        let files = try FileManager.default.contentsOfDirectory(atPath: url.deletingLastPathComponent().path)
+        #expect(files.count == 3)
+        #expect(files.contains { $0.hasPrefix("records.csv.") && $0.hasSuffix(".bak") && $0 != "records.csv.bak" })
+    }
+
+    @Test func splitRepliesParsesLabelsAndLegacy() {
+        #expect(CSVRecordStore.splitReplies("1. 【簡短收到】好\n2. 【設立界線】不行\n再一行") == [
+            Reply(label: "簡短收到", text: "好"), Reply(label: "設立界線", text: "不行\n再一行"),
+        ])
+        #expect(CSVRecordStore.splitReplies("1. 好\n2. 晚點") == [Reply(label: "", text: "好"), Reply(label: "", text: "晚點")])
     }
 }

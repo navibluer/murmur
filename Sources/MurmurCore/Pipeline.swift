@@ -7,7 +7,7 @@ public enum DeliveryPolicy {
 
 public actor Pipeline {
     enum Copy {
-        static let notAudio = "請轉傳語音訊息給我，我會幫你整理逐字稿、重點、情緒與回覆建議。"
+        static let notAudio = "請轉傳語音訊息給我，我會幫你整理逐字稿、情緒分析與回覆建議。"
         static let external = "這則語音無法下載（外部來源），請改轉傳 LINE 內的語音訊息。"
         static let missing = "找不到這則語音，可能已被收回或過期。"
         static let empty = "沒有辨識到語音內容。"

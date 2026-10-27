@@ -66,7 +66,7 @@ final class FakeAnalyzer: Analyzer, @unchecked Sendable {
         count.value += 1
         seenCategories.value.append(categories)
         if let error { throw error }
-        return Analysis(polished: "p", summary: "s", sentiment: "x", replies: ["a"], category: "家庭生活")
+        return Analysis(polished: "p", sentiment: "x", replies: [Reply(label: "簡短收到", text: "a")], category: "家庭生活")
     }
 }
 
@@ -146,7 +146,7 @@ struct Boom: Error {}
         let p = make()
         await p.handle(e, receivedAt: start)
         #expect(line.replies.value.isEmpty)
-        #expect(line.pushes.value.count == 1 && line.pushes.value[0].count == 4)
+        #expect(line.pushes.value.count == 1 && line.pushes.value[0].count == 3)
     }
 
     @Test func policy() {
@@ -184,7 +184,7 @@ struct Boom: Error {}
     @Test func textMessage() async throws {
         let p = make()
         await p.handle(try event(msg: #"{"id":"m","type":"text","text":"hi"}"#), receivedAt: start)
-        #expect(line.replies.value == [["請轉傳語音訊息給我，我會幫你整理逐字稿、重點、情緒與回覆建議。"]])
+        #expect(line.replies.value == [["請轉傳語音訊息給我，我會幫你整理逐字稿、情緒分析與回覆建議。"]])
     }
 
     @Test func audioReply() async throws {
@@ -192,7 +192,7 @@ struct Boom: Error {}
         offset.value = .seconds(10)
         await p.handle(try event(), receivedAt: start)
         #expect(line.calls.value.first == "loading:U1:60")
-        #expect(line.replies.value.count == 1 && line.replies.value[0].count == 4)
+        #expect(line.replies.value.count == 1 && line.replies.value[0].count == 3)
         #expect(line.pushes.value.isEmpty)
         let f = try #require(tr.files.value.first)
         #expect(f.lastPathComponent == "m1.m4a")
@@ -203,7 +203,7 @@ struct Boom: Error {}
         let p = make()
         offset.value = .seconds(55)
         await p.handle(try event(), receivedAt: start)
-        #expect(line.pushes.value.count == 1 && line.pushes.value[0].count == 4)
+        #expect(line.pushes.value.count == 1 && line.pushes.value[0].count == 3)
         #expect(line.replies.value.isEmpty)
         #expect(!line.calls.value.contains { $0.hasPrefix("reply") })
     }
@@ -219,7 +219,7 @@ struct Boom: Error {}
         line.loadingError = Boom()
         let p = make()
         await p.handle(try event(), receivedAt: start)
-        #expect(line.replies.value.first?.count == 4)
+        #expect(line.replies.value.first?.count == 3)
     }
 
     @Test func external() async throws {
@@ -280,22 +280,22 @@ struct Boom: Error {}
     }
 
     @Test func duplicateFingerprintSkipsAnalyzerButReplies() async throws {
-        let cached = Analysis(polished: "舊逐字稿", summary: "舊重點", sentiment: "舊", replies: ["舊回覆"], category: "舊分類")
+        let cached = Analysis(polished: "舊逐字稿", sentiment: "舊", replies: [Reply(label: "舊策略", text: "舊回覆")], category: "舊分類")
         store.records.value = [Record(time: "2020-01-01 00:00", fingerprint: Record.fingerprint(of: "你好"), analysis: cached)]
         let p = make()
         await p.handle(try event(), receivedAt: start)
         #expect(an.count.value == 0)
         #expect(store.records.value.count == 1)
         let msgs = try #require(line.replies.value.first)
-        #expect(msgs.count == 4)
-        #expect(msgs[0].contains("🏷️ 分類：舊分類") && msgs[0].contains("舊重點"))
+        #expect(msgs.count == 3)
+        #expect(msgs[0].contains("🏷️ 分類：舊分類") && msgs[0].contains("舊逐字稿"))
     }
 
     @Test func storeAppendFailureStillReplies() async throws {
         store.appendError = Boom()
         let p = make()
         await p.handle(try event(), receivedAt: start)
-        #expect(line.replies.value.first?.count == 4)
+        #expect(line.replies.value.first?.count == 3)
     }
 
     @Test func storeReadFailureTreatedAsMissingWithSeedCategories() async throws {
@@ -305,7 +305,7 @@ struct Boom: Error {}
         await p.handle(try event(), receivedAt: start)
         #expect(an.count.value == 1)
         #expect(an.seenCategories.value == [RecordStoreDefaults.seedCategories])
-        #expect(line.replies.value.first?.count == 4)
+        #expect(line.replies.value.first?.count == 3)
     }
 
     @Test func analyzerFailureWritesNoRecord() async throws {

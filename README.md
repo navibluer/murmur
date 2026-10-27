@@ -1,6 +1,6 @@
 # Murmur
 
-Murmur captures voice messages from LINE Desktop chats and turns them into transcripts, summaries, sentiment insights, and suggested replies.
+Murmur captures voice messages from LINE Desktop chats and turns them into transcripts, sentiment insights, and suggested replies (each tagged with a strategy label).
 
 ## 背景常駐（launchd）
 
@@ -43,7 +43,7 @@ scripts/murmurctl install           # 背景常駐（見上方「背景常駐」
 
 ## 分析紀錄（CSV）
 
-`serve` 會把每則語音的分析結果追加到 CSV，預設 `data/records.csv`（相對於執行目錄，可用 `.env` 的 `RECORDS_PATH` 改；`data/` 已加入 `.gitignore`，目錄不存在會自動建立）。欄位：`時間,指紋,分類,重點整理,逐字稿,情緒分析,回覆建議`；UTF-8 含 BOM，Excel 可直接開啟。分類由 Claude 從現有分類（初始：家庭生活、健康醫療、金錢財務、工作事業、閒聊問候）挑選，都不適合時自訂新分類。指紋為原始辨識逐字稿的 SHA256 前 16 字元；同一段語音重複轉傳時直接沿用第一筆紀錄回覆，不再呼叫 Claude。
+`serve` 會把每則語音的分析結果追加到 CSV，預設 `data/records.csv`（相對於執行目錄，可用 `.env` 的 `RECORDS_PATH` 改；`data/` 已加入 `.gitignore`，目錄不存在會自動建立）。欄位：`時間,指紋,分類,逐字稿,情緒分析,回覆建議`（回覆建議每則格式為 `N. 【策略標籤】內容`，以換行分隔）；舊版 7 欄檔（含「重點整理」）在下次寫入時會先備份為 `records.csv.bak`（已存在則加時間戳記）再自動遷移為新格式；UTF-8 含 BOM，Excel 可直接開啟。分類由 Claude 從現有分類（初始：家庭生活、健康醫療、金錢財務、工作事業、閒聊問候）挑選，都不適合時自訂新分類。指紋為原始辨識逐字稿的 SHA256 前 16 字元；同一段語音重複轉傳時直接沿用第一筆紀錄回覆，不再呼叫 Claude。
 
 ## LINE 設定
 
@@ -52,7 +52,7 @@ scripts/murmurctl install           # 背景常駐（見上方「背景常駐」
 3. 在 Official Account Manager 的回應設定中，關閉「自動回應訊息」，並開啟 Webhook。
 4. 到 LINE Developers Console：Basic settings 取得 Channel secret；Messaging API 分頁發行長期（long-lived）Channel access token。填入 `.env` 的 `LINE_CHANNEL_SECRET`、`LINE_CHANNEL_ACCESS_TOKEN`，並填 `ANTHROPIC_API_KEY`。
 5. 啟動伺服器與 ngrok（見下），回 Messaging API 分頁設定 Webhook URL 為 `https://<你的網域>/webhook`，按 Verify，並開啟 Use webhook。
-6. 用自己的 LINE 傳任意訊息給 bot；`serve` 的 log 會印出 `未授權的 userId: Uxxxx…`，把該 ID 填入 `.env` 的 `ALLOWED_USER_IDS`（多個以逗號分隔），重啟 `serve`。之後傳語音訊息即可收到逐字稿、摘要、情緒與建議回覆。
+6. 用自己的 LINE 傳任意訊息給 bot；`serve` 的 log 會印出 `未授權的 userId: Uxxxx…`，把該 ID 填入 `.env` 的 `ALLOWED_USER_IDS`（多個以逗號分隔），重啟 `serve`。之後傳語音訊息即可收到逐字稿（含分類）、情緒分析與帶策略標籤的建議回覆。
 
 ## ngrok
 

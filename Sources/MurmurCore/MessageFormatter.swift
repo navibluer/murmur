@@ -5,7 +5,6 @@ public enum MessageFormatter {
     static let suffix = "…（已截斷）"
     static let none = "（無）"
     static let divider = "━━━━━━━━━━"
-    static let summaryHeader = "💡【重點整理】"
     static let transcriptHeader = "🎙️【逐字稿】"
     static let sentimentHeader = "🌡️【情緒分析】"
     static let repliesHeader = "🪄【回覆建議】"
@@ -14,15 +13,19 @@ public enum MessageFormatter {
 
     public static func format(_ a: Analysis) -> [String] {
         let replies: String
-        let cleaned = a.replies.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+        let cleaned = a.replies.map {
+            Reply(label: $0.label.trimmingCharacters(in: .whitespacesAndNewlines),
+                  text: $0.text.trimmingCharacters(in: .whitespacesAndNewlines))
+        }.filter { !$0.text.isEmpty }
         if cleaned.isEmpty {
             replies = none
         } else {
-            replies = cleaned.enumerated().map { "\($0.offset + 1). \($0.element)" }.joined(separator: "\n\n")
+            replies = cleaned.enumerated().map { i, r in
+                r.label.isEmpty ? "\(i + 1). \(r.text)" : "\(i + 1). 【\(r.label)】\n\(r.text)"
+            }.joined(separator: "\n\n")
         }
         return [
-            truncate(header(summaryHeader) + "🏷️ 分類：\(orNone(a.category))\n\n" + orNone(a.summary)),
-            truncate(header(transcriptHeader) + orNone(a.polished)),
+            truncate(header(transcriptHeader) + "🏷️ 分類：\(orNone(a.category))\n\n" + orNone(a.polished)),
             truncate(header(sentimentHeader) + orNone(a.sentiment)),
             truncate(header(repliesHeader) + replies),
         ]

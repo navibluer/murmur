@@ -32,7 +32,7 @@ import Testing
 
     @Test func existingFingerprintSkipsAnalyzer() async {
         store.records.value = [Record(time: "t", fingerprint: Record.fingerprint(of: "你好"),
-                                      analysis: Analysis(polished: "", summary: "", sentiment: "", replies: []))]
+                                      analysis: Analysis(polished: "", sentiment: "", replies: []))]
         let out = Box<[String]>([])
         let s = await make().run(ids: ["a"], now: now, timeZone: utc) { out.value.append($0) }
         #expect(s.skipped == 1 && s.saved == 0)

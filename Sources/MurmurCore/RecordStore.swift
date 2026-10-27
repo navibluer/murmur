@@ -124,7 +124,8 @@ public enum CSVError: Error, Equatable {
 }
 
 public final class CSVRecordStore: RecordStore, @unchecked Sendable {
-    static let header = ["時間", "指紋", "分類", "重點整理", "逐字稿", "情緒分析", "回覆建議"]
+    static let header = ["時間", "指紋", "分類", "逐字稿", "情緒分析", "回覆建議"]
+    static let legacyHeader = ["時間", "指紋", "分類", "重點整理", "逐字稿", "情緒分析", "回覆建議"]
     let url: URL
     private let lock = NSLock()
 
@@ -148,10 +149,7 @@ public final class CSVRecordStore: RecordStore, @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         if readAll().contains(where: { $0.fingerprint == r.fingerprint }) { return }
         let fm = FileManager.default
-        let row = CSV.encode([
-            r.time, r.fingerprint, r.analysis.category, r.analysis.summary, r.analysis.polished,
-            r.analysis.sentiment, Self.joinReplies(r.analysis.replies),
-        ])
+        let row = Self.encodeRecord(r)
         let bom = Data([0xEF, 0xBB, 0xBF])
         let headerLine = CSV.encode(Self.header)
         var existing = Data()
@@ -167,6 +165,10 @@ public final class CSVRecordStore: RecordStore, @unchecked Sendable {
             return
         }
         let text = String(decoding: body, as: UTF8.self)
+        if text.hasPrefix(Self.legacyHeader.joined(separator: ",")) {
+            try migrateLegacy(text: text, newRow: row)
+            return
+        }
         let hasHeader = text.hasPrefix(Self.header.joined(separator: ","))
         let closer: String
         if CSV.parseTolerant(text).openQuote {
@@ -185,35 +187,84 @@ public final class CSVRecordStore: RecordStore, @unchecked Sendable {
         }
     }
 
+    /// 舊 7 欄檔：先備份為 .bak（已存在則加時間戳記），再以 atomic 整檔重寫為新格式。
+    private func migrateLegacy(text: String, newRow: String) throws {
+        let fm = FileManager.default
+        var bak = url.deletingLastPathComponent().appendingPathComponent(url.lastPathComponent + ".bak")
+        if fm.fileExists(atPath: bak.path) {
+            let f = DateFormatter()
+            f.locale = Locale(identifier: "en_US_POSIX")
+            f.dateFormat = "yyyyMMdd-HHmmss"
+            bak = url.deletingLastPathComponent()
+                .appendingPathComponent("\(url.lastPathComponent).\(f.string(from: Date())).bak")
+            var n = 1
+            while fm.fileExists(atPath: bak.path) {
+                bak = url.deletingLastPathComponent()
+                    .appendingPathComponent("\(url.lastPathComponent).\(f.string(from: Date()))-\(n).bak")
+                n += 1
+            }
+        }
+        try fm.copyItem(at: url, to: bak)
+        let rows = Self.records(from: CSV.parseTolerant(text).rows).map(Self.encodeRecord).joined()
+        let bom = Data([0xEF, 0xBB, 0xBF])
+        try (bom + Data((CSV.encode(Self.header) + rows + newRow).utf8)).write(to: url, options: .atomic)
+    }
+
+    static func encodeRecord(_ r: Record) -> String {
+        CSV.encode([
+            r.time, r.fingerprint, r.analysis.category, r.analysis.polished,
+            r.analysis.sentiment, joinReplies(r.analysis.replies),
+        ])
+    }
+
     /// 讀取失敗或檔案損毀都當作盡力而為：略過壞列，不丟錯。
     private func readAll() -> [Record] {
         guard let data = try? Data(contentsOf: url) else { return [] }
-        let rows = CSV.parseTolerant(String(decoding: data, as: UTF8.self)).rows
-        return rows.compactMap { raw in
-            guard raw.count == 7, raw != Self.header else { return nil }
+        return Self.records(from: CSV.parseTolerant(String(decoding: data, as: UTF8.self)).rows)
+    }
+
+    /// 新格式 6 欄、舊格式 7 欄（丟掉重點整理）；其餘欄位數與表頭列略過。
+    static func records(from rows: [[String]]) -> [Record] {
+        rows.compactMap { raw in
+            guard raw != header, raw != legacyHeader else { return nil }
             let f = raw.map(CSV.unescapeFormula)
-            return Record(
-                time: f[0], fingerprint: f[1],
-                analysis: Analysis(
-                    polished: f[4], summary: f[3], sentiment: f[5], replies: Self.splitReplies(f[6]), category: f[2]))
-        }
-    }
-
-    static func joinReplies(_ replies: [String]) -> String {
-        replies.enumerated().map { "\($0.offset + 1). \($0.element)" }.joined(separator: "\n")
-    }
-
-    /// 還原 `1. …\n2. …`；只有依序編號（1、2、3…）開頭的行才算新的一則，其餘行屬於上一則的換行內容。
-    static func splitReplies(_ s: String) -> [String] {
-        var out: [String] = []
-        for line in s.split(separator: "\n", omittingEmptySubsequences: false) {
-            let prefix = "\(out.count + 1). "
-            if line.hasPrefix(prefix) {
-                out.append(String(line.dropFirst(prefix.count)))
-            } else if !out.isEmpty {
-                out[out.count - 1] += "\n" + line
+            switch raw.count {
+            case 6:
+                return Record(
+                    time: f[0], fingerprint: f[1],
+                    analysis: Analysis(polished: f[3], sentiment: f[4], replies: splitReplies(f[5]), category: f[2]))
+            case 7:
+                return Record(
+                    time: f[0], fingerprint: f[1],
+                    analysis: Analysis(polished: f[4], sentiment: f[5], replies: splitReplies(f[6]), category: f[2]))
+            default: return nil
             }
         }
-        return out
+    }
+
+    static func joinReplies(_ replies: [Reply]) -> String {
+        replies.enumerated().map { i, r in
+            r.label.isEmpty ? "\(i + 1). \(r.text)" : "\(i + 1). 【\(r.label)】\(r.text)"
+        }.joined(separator: "\n")
+    }
+
+    /// 還原 `1. 【標籤】…\n2. …`；只有依序編號（1、2、3…）開頭的行才算新的一則，其餘行屬於上一則的換行內容。
+    /// 沒有【】的舊格式 label 為空字串。
+    static func splitReplies(_ s: String) -> [Reply] {
+        var raw: [String] = []
+        for line in s.split(separator: "\n", omittingEmptySubsequences: false) {
+            let prefix = "\(raw.count + 1). "
+            if line.hasPrefix(prefix) {
+                raw.append(String(line.dropFirst(prefix.count)))
+            } else if !raw.isEmpty {
+                raw[raw.count - 1] += "\n" + line
+            }
+        }
+        return raw.map { body in
+            if body.hasPrefix("【"), let end = body.firstIndex(of: "】") {
+                return Reply(label: String(body[body.index(after: body.startIndex)..<end]), text: String(body[body.index(after: end)...]))
+            }
+            return Reply(label: "", text: body)
+        }
     }
 }
