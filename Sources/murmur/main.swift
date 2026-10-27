@@ -17,13 +17,16 @@ if args.count >= 2, args[1] == "serve" {
         if config.allowedUserIDs.isEmpty {
             err("警告：ALLOWED_USER_IDS 為空，所有訊息都會被拒絕；請傳訊給 bot，從 log 的「未授權的 userId」複製")
         }
+        let store = CSVRecordStore(url: URL(fileURLWithPath: (config.recordsPath as NSString).expandingTildeInPath))
+        do { if try store.migrateIfNeeded() { err("紀錄檔已轉為新格式（舊檔備份為 .bak）") } }
+        catch { err("紀錄檔遷移失敗：\(error)") }
         let pipeline = Pipeline(
             config: config,
             line: LineClient(accessToken: config.lineChannelAccessToken),
             transcriber: AppleTranscriber(),
             analyzer: ClaudeAnalyzer(
                 apiKey: config.anthropicAPIKey, model: config.claudeModel, workspaceID: config.anthropicWorkspaceID),
-            store: CSVRecordStore(url: URL(fileURLWithPath: (config.recordsPath as NSString).expandingTildeInPath)))
+            store: store)
         err("murmur 監聽 127.0.0.1:\(config.port)（POST /webhook、GET /health）")
         try await buildApplication(config: config, pipeline: pipeline).runService()
     } catch {

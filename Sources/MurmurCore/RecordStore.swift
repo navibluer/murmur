@@ -187,6 +187,19 @@ public final class CSVRecordStore: RecordStore, @unchecked Sendable {
         }
     }
 
+    /// 檔案若是舊 7 欄格式就立即遷移（serve 啟動時呼叫）；回傳是否有遷移。
+    @discardableResult
+    public func migrateIfNeeded() throws -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        guard FileManager.default.fileExists(atPath: url.path) else { return false }
+        let data = try Data(contentsOf: url)
+        let body = data.starts(with: [0xEF, 0xBB, 0xBF]) ? data.dropFirst(3) : data[...]
+        let text = String(decoding: body, as: UTF8.self)
+        guard text.hasPrefix(Self.legacyHeader.joined(separator: ",")) else { return false }
+        try migrateLegacy(text: text, newRow: "")
+        return true
+    }
+
     /// 舊 7 欄檔：先備份為 .bak（已存在則加時間戳記），再以 atomic 整檔重寫為新格式。
     private func migrateLegacy(text: String, newRow: String) throws {
         let fm = FileManager.default

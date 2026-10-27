@@ -180,6 +180,20 @@ import Testing
         #expect(r.analysis.replies == [Reply(label: "", text: "好的"), Reply(label: "", text: "含\n換行的回覆")])
     }
 
+    @Test func migrateIfNeededConvertsLegacyWithoutNewRow() throws {
+        let original = try writeLegacy(legacyRows)
+        let store = CSVRecordStore(url: url)
+        #expect(try store.migrateIfNeeded())
+        let bak = url.deletingLastPathComponent().appendingPathComponent("records.csv.bak")
+        #expect(try Data(contentsOf: bak) == original)
+        let text = String(decoding: try Data(contentsOf: url).dropFirst(3), as: UTF8.self)
+        #expect(text.hasPrefix("時間,指紋,分類,逐字稿,情緒分析,回覆建議\r\n"))
+        #expect(try store.find(fingerprint: "old1")?.analysis.polished == "逐字稿一\n第二行")
+        #expect(try store.find(fingerprint: "old2") != nil)
+        #expect(try store.migrateIfNeeded() == false)  // 已是新格式，不再動
+        #expect(try CSVRecordStore(url: dir.appendingPathComponent("none.csv")).migrateIfNeeded() == false)
+    }
+
     @Test func appendMigratesLegacyFileWithBackup() throws {
         let original = try writeLegacy(legacyRows)
         let store = CSVRecordStore(url: url)
