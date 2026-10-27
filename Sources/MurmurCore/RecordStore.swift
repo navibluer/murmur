@@ -127,13 +127,17 @@ public final class CSVRecordStore: RecordStore, @unchecked Sendable {
     static let header = ["時間", "指紋", "分類", "逐字稿", "情緒分析", "回覆建議"]
     static let legacyHeader = ["時間", "指紋", "分類", "重點整理", "逐字稿", "情緒分析", "回覆建議"]
     let url: URL
+    let seedCategories: [String]
     private let lock = NSLock()
 
-    public init(url: URL) { self.url = url }
+    public init(url: URL, seedCategories: [String] = RecordStoreDefaults.seedCategories) {
+        self.url = url
+        self.seedCategories = seedCategories
+    }
 
     public func categories() throws -> [String] {
         lock.lock(); defer { lock.unlock() }
-        var out = RecordStoreDefaults.seedCategories
+        var out = seedCategories
         for r in readAll() where !r.analysis.category.isEmpty && !out.contains(r.analysis.category) {
             out.append(r.analysis.category)
         }

@@ -304,8 +304,19 @@ struct Boom: Error {}
         let p = make()
         await p.handle(try event(), receivedAt: start)
         #expect(an.count.value == 1)
-        #expect(an.seenCategories.value == [RecordStoreDefaults.seedCategories])
+        #expect(an.seenCategories.value == [Config(lineChannelSecret: "s", lineChannelAccessToken: "t", anthropicAPIKey: "k").seedCategories])
         #expect(line.replies.value.first?.count == 3)
+    }
+
+    @Test func storeReadFailureUsesConfiguredSeedCategories() async throws {
+        store.findError = Boom()
+        store.categoriesError = Boom()
+        var cfg = Config(lineChannelSecret: "s", lineChannelAccessToken: "t", anthropicAPIKey: "k", allowedUserIDs: ["U1"])
+        cfg.seedCategories = ["工作", "生活"]
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let p = Pipeline(config: cfg, line: line, transcriber: tr, analyzer: an, store: store, tempDir: dir)
+        await p.handle(try event(), receivedAt: start)
+        #expect(an.seenCategories.value == [["工作", "生活"]])
     }
 
     @Test func analyzerFailureWritesNoRecord() async throws {

@@ -235,4 +235,12 @@ import Testing
         ])
         #expect(CSVRecordStore.splitReplies("1. 好\n2. 晚點") == [Reply(label: "", text: "好"), Reply(label: "", text: "晚點")])
     }
+
+    @Test func customSeedOverridesDefaults() throws {
+        let store = CSVRecordStore(url: url, seedCategories: ["工作", "生活"])
+        #expect(try store.categories() == ["工作", "生活"])
+        try store.append(Record(time: "t", fingerprint: "1", analysis: analysis(category: "生活")))
+        try store.append(Record(time: "t", fingerprint: "2", analysis: analysis(category: "旅遊")))
+        #expect(try store.categories() == ["工作", "生活", "旅遊"])
+    }
 }

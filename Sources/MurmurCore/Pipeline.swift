@@ -131,7 +131,7 @@ public actor Pipeline {
             texts = MessageFormatter.format(cached.analysis)
         } else {
             do {
-                var categories = RecordStoreDefaults.seedCategories
+                var categories = config.seedCategories
                 if let store {
                     do { categories = try store.categories() }
                     catch { print("紀錄讀取失敗: \(error)") }

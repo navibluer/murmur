@@ -44,8 +44,11 @@ public struct ClaudeAnalyzer: Analyzer {
     let session: URLSession
     let workspaceID: String?
     let timeout: TimeInterval
+    let context: String?
 
-    public init(apiKey: String, model: String, session: URLSession = .shared, workspaceID: String? = nil, timeout: TimeInterval = 180) {
+    public init(apiKey: String, model: String, session: URLSession = .shared, workspaceID: String? = nil, timeout: TimeInterval = 180,
+                context: String? = nil) {
+        self.context = context
         self.timeout = timeout
         self.apiKey = apiKey
         self.model = model
@@ -54,49 +57,27 @@ public struct ClaudeAnalyzer: Analyzer {
     }
 
     static let systemPrompt = """
-        你是語音訊息分析助手，服務的使用者是「小明」。使用者會提供一段語音轉出的逐字稿（可能有同音錯字、缺標點、口語贅詞）。\
+        你是語音訊息分析助手。使用者會提供一段語音轉出的逐字稿（可能有同音錯字、缺標點、口語贅詞）。\
         請呼叫 submit_analysis 工具提交結果，所有欄位一律使用繁體中文（台灣用語），不得出現簡體字。\
         所有欄位需要換行時請直接輸出真正的換行字元，不要輸出跳脫序列（例如反斜線加 n）。
 
-        【背景情境】
-        這些語音訊息通常是一位父親傳給女兒小明的。（情境描述已移除）
-        
-        
-
-        請先依內容判斷是否符合這個情境（說話者以父親口吻對女兒說話、提到小明，或內容符合上述模式）：
-        - 符合：依下方規則分析與撰寫回覆。
-        - 不符合或無法判斷：不要套用背景情境，依語音內容一般性地分析，回覆建議不預設雙方關係。
-
         【欄位定義】
         - polished：潤飾後的逐字稿。修正同音錯字與辨識錯誤、補上標點、分段、去除口語贅詞，但不改變原意、不增刪內容。
-        - sentiment：情緒分析，依序包含：
-          1. 說話者的情緒與語氣。
-          2. 他實際的訴求是什麼（特別是與錢、要求小明做的事有關的部分），以及哪些要求不合理或超出小明的責任。
-          3. 是否有情緒勒索、施壓、罪惡感操作等模式，具體指出是哪些話。
-          4. 給小明的一句提醒：這些情緒與要求不是她的責任，她可以選擇不回、晚點回或只回最低限度。
-          語氣要站在小明這一邊，簡潔、具體，不要替父親辯護，也不要勸她「多體諒」。
+        - sentiment：情緒分析，包含說話者的情緒與語氣、實際的訴求，以及收訊者需要注意的地方。簡潔、具體。
         - replies：3 則回覆建議，每則是一個物件 { label, text }：
-          - label：這則回覆的策略，4～6 個字，例如「簡短收到」「設立界線」「延後處理」「明確拒絕」「表達關心」。\
-        3 則必須是不同策略，依內容挑最適合的組合；內容涉及金錢或不合理要求時，至少一則是設立界線或拒絕。
-          - text：可直接傳送給父親的訊息。
-          撰寫原則（務必遵守）：
-          - 以保護小明的心力為第一優先，而不是滿足或安撫父親。
-          - 簡短：每則 1～3 句，不說教、不講道理、不試圖說服、不翻舊帳、不辯解。
-          - 平靜、中性、不帶情緒，不激化衝突，也不使用會引發罪惡感的字眼。
-          - 不替小明答應任何金錢、時間或行動上的承諾；需要決定的事，用「我想一下」「之後再說」這類方式保留空間。
-          - 不承接他對過往的悔恨或對未來的焦慮，不需要逐一回應他提到的每件事。
-          - 稱呼用「爸」。
+          - label：這則回覆的策略，4～6 個字，例如「簡短收到」「設立界線」「延後處理」「明確拒絕」「表達關心」。3 則必須是不同策略。
+          - text：可直接傳送給說話者的訊息，1～3 句，口吻自然，不替使用者做出承諾。
         - category：內容分類，單一簡短的繁體中文詞（2～6 個字）；優先從使用者提供的現有分類中選擇，都不適合時才自訂新分類。
 
-        不要加入安全提醒、求助專線或緊急電話號碼，回覆建議也不要提到這些。
-
-        【名字校正】
-        逐字稿中聽起來像「小明」的同音或近音詞（例如燕主、院主、燕竹、延竹、言竹、彥築、彥主），\
-        若依上下文判斷是在稱呼或提到人，潤飾時一律改為「小明」；若明顯是其他詞義則保留原文。
-
-        除了上述背景，只依語音內容判斷，不要臆測沒有出現的事實。
+        若下方有【使用者情境】，請依其中的背景、分析重點、回覆原則與名字校正處理；情境中的規則與上方一般規則衝突時，以情境為準。
+        除了情境中提供的背景，只依語音內容判斷，不要臆測沒有出現的事實。
         每個欄位都必須是根據逐字稿寫出的完整內容，嚴禁填入 placeholder、空字串或任何佔位文字；只呼叫一次 submit_analysis。
         """
+
+    var systemPrompt: String {
+        guard let context, !context.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return Self.systemPrompt }
+        return Self.systemPrompt + "\n\n【使用者情境】\n" + context
+    }
 
     static var tool: [String: Any] { [
         "name": "submit_analysis",
@@ -139,7 +120,7 @@ public struct ClaudeAnalyzer: Analyzer {
         let body: [String: Any] = [
             "model": model,
             "max_tokens": 16000,
-            "system": Self.systemPrompt,
+            "system": systemPrompt,
             "tools": [Self.tool],
             "tool_choice": ["type": "auto"],
             "messages": [[

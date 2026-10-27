@@ -30,6 +30,11 @@ public struct AppleTranscriber: Transcriber {
         self.locale = locale
     }
 
+    /// 簡轉繁只在中文語系（identifier 以 zh 開頭）套用。
+    static func convertsToTraditional(locale: Locale) -> Bool {
+        locale.identifier.lowercased().hasPrefix("zh")
+    }
+
     public func transcribe(fileURL: URL) async throws -> String {
         let raw: String
         if let supported = await SpeechTranscriber.supportedLocale(equivalentTo: locale) {
@@ -37,7 +42,8 @@ public struct AppleTranscriber: Transcriber {
         } else {
             raw = try await transcribeWithLegacy(fileURL: fileURL)
         }
-        return Hant.convert(raw.trimmingCharacters(in: .whitespacesAndNewlines))
+        let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        return Self.convertsToTraditional(locale: locale) ? Hant.convert(text) : text
     }
 
     private func transcribeWithAnalyzer(fileURL: URL, locale: Locale) async throws -> String {

@@ -29,8 +29,8 @@ Config comes from `.env` in the cwd merged with process env (env wins); see `.en
 - `LineSignature` — HMAC-SHA256 webhook signature check.
 - `LineWebhook` — Decodable webhook payload/event types.
 - `LineClient` — LINE API (content download with transcode polling, reply/push/loading).
-- `Transcriber` — `AppleTranscriber` (SpeechAnalyzer zh-TW, Hant conversion).
-- `Analyzer` — `ClaudeAnalyzer` (Claude API: polished text, sentiment, strategy-labelled replies `[Reply{label,text}]`, category).
+- `Transcriber` — `AppleTranscriber` (SpeechAnalyzer, locale from `SPEECH_LOCALE` default zh-TW, Hant conversion only for `zh*`).
+- `Analyzer` — `ClaudeAnalyzer` (Claude API: polished text, sentiment, strategy-labelled replies `[Reply{label,text}]`, category). Per-user context comes from an optional gitignored `context.md` (`CONTEXT_FILE`, see `context.example.md`), appended to the system prompt as `【使用者情境】`; personal settings (`NGROK_URL`, `SEED_CATEGORIES`, `SPEECH_LOCALE`) live in `.env`.
 - `MessageFormatter` — splits analysis into 3 LINE messages (transcript + category, sentiment, numbered `【label】` replies).
 - `RecordStore` — `CSVRecordStore`：每則語音分析存成 CSV（預設 `data/records.csv`，`RECORDS_PATH` 可改；UTF-8 BOM、RFC 4180、欄位 `時間,指紋,分類,逐字稿,情緒分析,回覆建議`；舊 7 欄檔首次寫入時自動遷移並留 `.bak`）。指紋＝原始逐字稿 SHA256 前 16 hex，重複語音沿用第一筆紀錄不再呼叫 Claude；`categories()` ＝ seed ∪ 檔案已出現分類。
 - `Pipeline` — actor: whitelist, dedup, reply-vs-push time policy, error handling; serializes events.

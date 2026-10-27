@@ -51,7 +51,11 @@ cp .env.example .env
 | `ANTHROPIC_WORKSPACE_ID` | 選填；API key 沒有綁定 workspace 時才需要 |
 | `ALLOWED_USER_IDS` | 允許使用的 LINE userId，多個用逗號分隔 |
 | `PORT` | 預設 `47821` |
+| `NGROK_URL` | `scripts/murmurctl install` 必填；你的 ngrok 固定網域，例如 `https://xxx.ngrok-free.app` |
 | `RECORDS_PATH` | 選填；CSV 路徑，預設 `data/records.csv` |
+| `CONTEXT_FILE` | 選填；使用者情境檔路徑，預設 `context.md`（相對於執行目錄，支援 `~`） |
+| `SEED_CATEGORIES` | 選填；初始分類，逗號分隔，預設 `家庭生活,健康醫療,金錢財務,工作事業,閒聊問候` |
+| `SPEECH_LOCALE` | 選填；語音辨識語系，預設 `zh-TW`（簡轉繁只在 `zh` 開頭的語系套用） |
 
 `.env` 已列在 `.gitignore` 裡，不會被 commit。
 
@@ -69,7 +73,7 @@ scripts/murmurctl install
 
 這個指令會建置 release 版，並把 `murmur serve` 和 ngrok 註冊成 launchd 背景服務：登入 macOS 後自動啟動，程式結束時自動重啟。
 
-ngrok 網域可以用 `NGROK_URL=https://<你的網域> scripts/murmurctl install` 指定。
+ngrok 網域請寫在 `.env` 的 `NGROK_URL`（也可用環境變數 `NGROK_URL=https://<你的網域> scripts/murmurctl install` 臨時指定，環境變數優先）；兩者都沒有時 `install` 會報錯並結束。
 
 ### 4. 連上 LINE
 
@@ -120,14 +124,22 @@ swift run murmur backfill <LINE 訊息 ID> [<訊息 ID> ...]
 
 ## 調整分析內容
 
-分析規則都寫在 `Sources/MurmurCore/Analyzer.swift` 的 `systemPrompt` 裡：
+通用的分析規則寫在 `Sources/MurmurCore/Analyzer.swift` 的 `systemPrompt`；跟你個人有關的背景放在**情境檔**，不需要改程式碼：
 
-- **對話情境**：例如說話者通常是誰、雙方是什麼關係。
+1. 複製範例：`cp context.example.md context.md`
+2. 編輯 `context.md`。它已列在 `.gitignore`，不會進 git。
+3. 執行 `scripts/murmurctl restart` 生效。
+
+情境檔路徑可以用 `.env` 的 `CONTEXT_FILE` 指定（預設 `context.md`，相對於執行目錄，支援 `~`）。找不到情境檔時不會報錯，`serve` 啟動時會印出一行提示，之後做一般分析。
+
+情境檔的內容會接在 system prompt 後面（標題為【使用者情境】），可以寫：
+
+- **背景情境**：例如說話者通常是誰、雙方是什麼關係。
 - **情緒分析**：要包含哪些項目。
-- **回覆建議**：撰寫原則，以及有哪些策略標籤。
+- **回覆建議**：撰寫原則、稱呼，以及有哪些策略標籤。
 - **名字校正**：語音辨識常把人名聽錯，這裡可以列出常見的錯字，讓 Claude 改回正確的名字。
 
-改完執行 `scripts/murmurctl restart` 就會生效。
+情境中的規則與一般規則衝突時，以情境為準。
 
 ## 開發
 

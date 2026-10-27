@@ -32,10 +32,10 @@ final class StubProtocol: URLProtocol, @unchecked Sendable {
 }
 
 @Suite(.serialized) struct AnalyzerTests {
-    func makeAnalyzer() -> ClaudeAnalyzer {
+    func makeAnalyzer(context: String? = nil) -> ClaudeAnalyzer {
         let cfg = URLSessionConfiguration.ephemeral
         cfg.protocolClasses = [StubProtocol.self]
-        return ClaudeAnalyzer(apiKey: "test-key", model: "claude-sonnet-5-5", session: URLSession(configuration: cfg))
+        return ClaudeAnalyzer(apiKey: "test-key", model: "claude-sonnet-5-5", session: URLSession(configuration: cfg), context: context)
     }
 
     func toolUseResponse(_ input: [String: Any]) -> Data {
@@ -201,7 +201,8 @@ final class StubProtocol: URLProtocol, @unchecked Sendable {
         let body = try #require(StubProtocol.lastBody)
         let obj = try #require(try JSONSerialization.jsonObject(with: body) as? [String: Any])
         let system = try #require(obj["system"] as? String)
-        #expect(!system.contains("【安全規則") && !system.contains("1925") && system.contains("不要加入安全提醒"))
+        #expect(!system.contains("【使用者情境】\n"))  // 一般 prompt 內文提及該詞，但不含段落標頭
+        #expect(system.contains("若下方有【使用者情境】"))
         #expect(!system.contains("summary"))
         let tool = try #require((obj["tools"] as? [[String: Any]])?.first)
         let schema = try #require(tool["input_schema"] as? [String: Any])
@@ -211,5 +212,24 @@ final class StubProtocol: URLProtocol, @unchecked Sendable {
         #expect(items["type"] as? String == "object")
         #expect((items["required"] as? [String]) == ["label", "text"])
         #expect(items["additionalProperties"] as? Bool == false)
+    }
+
+    @Test func contextAppendedToSystemPrompt() async throws {
+        StubProtocol.handler = { _, _ in (200, self.toolUseResponse(self.good())) }
+        _ = try await makeAnalyzer(context: "服務的使用者是「小明」。").analyze(transcript: "x", categories: ["a"])
+        let body = try #require(StubProtocol.lastBody)
+        let obj = try #require(try JSONSerialization.jsonObject(with: body) as? [String: Any])
+        let system = try #require(obj["system"] as? String)
+        #expect(system == ClaudeAnalyzer.systemPrompt + "\n\n【使用者情境】\n服務的使用者是「小明」。")
+    }
+
+    @Test func emptyContextOmitted() async throws {
+        StubProtocol.handler = { _, _ in (200, self.toolUseResponse(self.good())) }
+        for ctx in [nil, "", "  \n"] as [String?] {
+            _ = try await makeAnalyzer(context: ctx).analyze(transcript: "x", categories: ["a"])
+            let body = try #require(StubProtocol.lastBody)
+        let obj = try #require(try JSONSerialization.jsonObject(with: body) as? [String: Any])
+            #expect(obj["system"] as? String == ClaudeAnalyzer.systemPrompt)
+        }
     }
 }

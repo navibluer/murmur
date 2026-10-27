@@ -10,12 +10,17 @@ DOMAIN="gui/$(id -u)"
 SERVE_LABEL="com.murmur.serve"
 NGROK_LABEL="com.murmur.ngrok"
 BIN="$REPO/.build/release/murmur"
-NGROK_URL="${NGROK_URL:-https://example.ngrok-free.app}"
 
 port() {
   local p
   p="$(grep -E '^PORT=' "$REPO/.env" 2>/dev/null | tail -1 | cut -d= -f2 | tr -d '[:space:]"' || true)"
   echo "${p:-47821}"
+}
+
+# NGROK_URL：環境變數優先，否則讀 .env；都沒有則回傳空字串
+ngrok_url() {
+  if [ -n "${NGROK_URL:-}" ]; then echo "$NGROK_URL"; return; fi
+  grep -E '^NGROK_URL=' "$REPO/.env" 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '[:space:]"'"'" || true
 }
 
 ngrok_bin() { command -v ngrok || echo /opt/homebrew/bin/ngrok; }
@@ -49,6 +54,11 @@ unload() { launchctl bootout "$DOMAIN/$1" 2>/dev/null || true; }
 
 case "${1:-}" in
   install)
+    NGROK_URL="$(ngrok_url)"
+    if [ -z "$NGROK_URL" ]; then
+      echo "請在 .env 設定 NGROK_URL（例如 https://xxx.ngrok-free.app）" >&2
+      exit 1
+    fi
     echo "建置 release 版本…"
     (cd "$REPO" && swift build -c release 2>&1 | tail -1)
     mkdir -p "$AGENTS" "$LOGS"

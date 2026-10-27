@@ -17,15 +17,18 @@ if args.count >= 2, args[1] == "serve" {
         if config.allowedUserIDs.isEmpty {
             err("警告：ALLOWED_USER_IDS 為空，所有訊息都會被拒絕；請傳訊給 bot，從 log 的「未授權的 userId」複製")
         }
-        let store = CSVRecordStore(url: URL(fileURLWithPath: (config.recordsPath as NSString).expandingTildeInPath))
+        let store = CSVRecordStore(
+            url: URL(fileURLWithPath: (config.recordsPath as NSString).expandingTildeInPath), seedCategories: config.seedCategories)
         do { if try store.migrateIfNeeded() { err("紀錄檔已轉為新格式（舊檔備份為 .bak）") } }
         catch { err("紀錄檔遷移失敗：\(error)") }
+        if config.context == nil { err("未找到情境檔 \(config.contextFile)，使用一般分析") }
         let pipeline = Pipeline(
             config: config,
             line: LineClient(accessToken: config.lineChannelAccessToken),
-            transcriber: AppleTranscriber(),
+            transcriber: AppleTranscriber(locale: Locale(identifier: config.speechLocale)),
             analyzer: ClaudeAnalyzer(
-                apiKey: config.anthropicAPIKey, model: config.claudeModel, workspaceID: config.anthropicWorkspaceID),
+                apiKey: config.anthropicAPIKey, model: config.claudeModel, workspaceID: config.anthropicWorkspaceID,
+                context: config.context),
             store: store)
         err("murmur 監聽 127.0.0.1:\(config.port)（POST /webhook、GET /health）")
         try await buildApplication(config: config, pipeline: pipeline).runService()
@@ -50,10 +53,12 @@ if args.count >= 2, args[1] == "backfill" {
         let config = try Config.load(env: env)
         let summary = await Backfill(
             line: LineClient(accessToken: config.lineChannelAccessToken),
-            transcriber: AppleTranscriber(),
+            transcriber: AppleTranscriber(locale: Locale(identifier: config.speechLocale)),
             analyzer: ClaudeAnalyzer(
-                apiKey: config.anthropicAPIKey, model: config.claudeModel, workspaceID: config.anthropicWorkspaceID),
-            store: CSVRecordStore(url: URL(fileURLWithPath: (config.recordsPath as NSString).expandingTildeInPath))
+                apiKey: config.anthropicAPIKey, model: config.claudeModel, workspaceID: config.anthropicWorkspaceID,
+                context: config.context),
+            store: CSVRecordStore(
+                url: URL(fileURLWithPath: (config.recordsPath as NSString).expandingTildeInPath), seedCategories: config.seedCategories)
         ).run(ids: ids)
         exit(summary.failed > 0 ? 1 : 0)
     } catch {
@@ -79,15 +84,18 @@ do {
         exit(78)
     }
     let model = env["CLAUDE_MODEL"].flatMap { $0.isEmpty ? nil : $0 } ?? "claude-sonnet-5-5"
-    let text = try await AppleTranscriber().transcribe(fileURL: url)
+    let locale = Locale(identifier: env["SPEECH_LOCALE"].flatMap { $0.isEmpty ? nil : $0 } ?? "zh-TW")
+    let contextFile = env["CONTEXT_FILE"].flatMap { $0.isEmpty ? nil : $0 } ?? "context.md"
+    let text = try await AppleTranscriber(locale: locale).transcribe(fileURL: url)
     let t1 = Date().timeIntervalSince(start)
     if args[1] == "transcribe" {
         print(text)
         err(String(format: "transcribe: %.1fs", t1))
     } else {
         let t2Start = Date()
-        let analysis = try await ClaudeAnalyzer(apiKey: key, model: model, workspaceID: env["ANTHROPIC_WORKSPACE_ID"]).analyze(
-            transcript: text, categories: RecordStoreDefaults.seedCategories)
+        let analysis = try await ClaudeAnalyzer(
+            apiKey: key, model: model, workspaceID: env["ANTHROPIC_WORKSPACE_ID"], context: Config.readContext(path: contextFile)
+        ).analyze(transcript: text, categories: Config.parseSeedCategories(env["SEED_CATEGORIES"]))
         let t2 = Date().timeIntervalSince(t2Start)
         for m in MessageFormatter.format(analysis) {
             print(m)
