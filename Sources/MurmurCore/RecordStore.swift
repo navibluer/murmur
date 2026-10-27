@@ -124,8 +124,21 @@ public enum CSVError: Error, Equatable {
 }
 
 public final class CSVRecordStore: RecordStore, @unchecked Sendable {
-    static let header = ["時間", "指紋", "分類", "逐字稿", "情緒分析", "回覆建議"]
-    static let legacyHeader = ["時間", "指紋", "分類", "重點整理", "逐字稿", "情緒分析", "回覆建議"]
+    /// v3（現行）：精簡逐字稿 + 逐字稿，7 欄。
+    static let header = ["時間", "指紋", "分類", "精簡逐字稿", "逐字稿", "情緒分析", "回覆建議"]
+    /// v1：含「重點整理」，同為 7 欄，只能靠表頭與 v3 區分。
+    static let headerV1 = ["時間", "指紋", "分類", "重點整理", "逐字稿", "情緒分析", "回覆建議"]
+    /// v2：6 欄。
+    static let headerV2 = ["時間", "指紋", "分類", "逐字稿", "情緒分析", "回覆建議"]
+
+    enum Format { case v1, v2, v3 }
+
+    static func format(ofText text: String) -> Format? {
+        if text.hasPrefix(headerV1.joined(separator: ",")) { return .v1 }
+        if text.hasPrefix(headerV2.joined(separator: ",")) { return .v2 }
+        if text.hasPrefix(header.joined(separator: ",")) { return .v3 }
+        return nil
+    }
     let url: URL
     let seedCategories: [String]
     private let lock = NSLock()
@@ -169,11 +182,11 @@ public final class CSVRecordStore: RecordStore, @unchecked Sendable {
             return
         }
         let text = String(decoding: body, as: UTF8.self)
-        if text.hasPrefix(Self.legacyHeader.joined(separator: ",")) {
+        if let f = Self.format(ofText: text), f != .v3 {
             try migrateLegacy(text: text, newRow: row)
             return
         }
-        let hasHeader = text.hasPrefix(Self.header.joined(separator: ","))
+        let hasHeader = Self.format(ofText: text) == .v3
         let closer: String
         if CSV.parseTolerant(text).openQuote {
             closer = "\"\r\n"  // 收掉未閉合引號的殘列，讓新列能正確讀回
@@ -191,7 +204,7 @@ public final class CSVRecordStore: RecordStore, @unchecked Sendable {
         }
     }
 
-    /// 檔案若是舊 7 欄格式就立即遷移（serve 啟動時呼叫）；回傳是否有遷移。
+    /// 檔案若是舊格式（v1 7 欄含重點整理、v2 6 欄）就立即遷移（serve 啟動時呼叫）；回傳是否有遷移。
     @discardableResult
     public func migrateIfNeeded() throws -> Bool {
         lock.lock(); defer { lock.unlock() }
@@ -199,12 +212,12 @@ public final class CSVRecordStore: RecordStore, @unchecked Sendable {
         let data = try Data(contentsOf: url)
         let body = data.starts(with: [0xEF, 0xBB, 0xBF]) ? data.dropFirst(3) : data[...]
         let text = String(decoding: body, as: UTF8.self)
-        guard text.hasPrefix(Self.legacyHeader.joined(separator: ",")) else { return false }
+        guard let f = Self.format(ofText: text), f != .v3 else { return false }
         try migrateLegacy(text: text, newRow: "")
         return true
     }
 
-    /// 舊 7 欄檔：先備份為 .bak（已存在則加時間戳記），再以 atomic 整檔重寫為新格式。
+    /// 舊格式檔（v1／v2）：先備份為 .bak（已存在則加時間戳記），再以 atomic 整檔重寫為新格式。
     private func migrateLegacy(text: String, newRow: String) throws {
         let fm = FileManager.default
         var bak = url.deletingLastPathComponent().appendingPathComponent(url.lastPathComponent + ".bak")
@@ -229,7 +242,7 @@ public final class CSVRecordStore: RecordStore, @unchecked Sendable {
 
     static func encodeRecord(_ r: Record) -> String {
         CSV.encode([
-            r.time, r.fingerprint, r.analysis.category, r.analysis.polished,
+            r.time, r.fingerprint, r.analysis.category, r.analysis.clean, r.analysis.polished,
             r.analysis.sentiment, joinReplies(r.analysis.replies),
         ])
     }
@@ -240,17 +253,31 @@ public final class CSVRecordStore: RecordStore, @unchecked Sendable {
         return Self.records(from: CSV.parseTolerant(String(decoding: data, as: UTF8.self)).rows)
     }
 
-    /// 新格式 6 欄、舊格式 7 欄（丟掉重點整理）；其餘欄位數與表頭列略過。
+    /// 一律以表頭判斷格式（v1 與 v3 同為 7 欄，不可用欄位數判斷）；欄位數與表頭不符的列略過。
+    /// 沒有表頭時才退而以欄位數推測（7 欄視為 v3、6 欄視為 v2）。
     static func records(from rows: [[String]]) -> [Record] {
-        rows.compactMap { raw in
-            guard raw != header, raw != legacyHeader else { return nil }
+        var format: Format? = switch rows.first {
+        case header?: .v3
+        case headerV1?: .v1
+        case headerV2?: .v2
+        default: nil
+        }
+        return rows.compactMap { raw in
+            if raw == header { format = .v3; return nil }
+            if raw == headerV1 { format = .v1; return nil }
+            if raw == headerV2 { format = .v2; return nil }
             let f = raw.map(CSV.unescapeFormula)
-            switch raw.count {
-            case 6:
+            let fmt = format ?? (raw.count == 7 ? .v3 : .v2)
+            switch (fmt, raw.count) {
+            case (.v3, 7):
+                return Record(
+                    time: f[0], fingerprint: f[1],
+                    analysis: Analysis(polished: f[4], clean: f[3], sentiment: f[5], replies: splitReplies(f[6]), category: f[2]))
+            case (.v2, 6):
                 return Record(
                     time: f[0], fingerprint: f[1],
                     analysis: Analysis(polished: f[3], sentiment: f[4], replies: splitReplies(f[5]), category: f[2]))
-            case 7:
+            case (.v1, 7):
                 return Record(
                     time: f[0], fingerprint: f[1],
                     analysis: Analysis(polished: f[4], sentiment: f[5], replies: splitReplies(f[6]), category: f[2]))

@@ -3,28 +3,48 @@ import Testing
 
 @Suite struct MessageFormatterTests {
     let sample = Analysis(
-        polished: "潤飾後的逐字稿", sentiment: "整體平靜",
+        polished: "潤飾後的逐字稿", clean: "精簡後的逐字稿", sentiment: "整體平靜",
         replies: [Reply(label: "簡短收到", text: "好的，我知道了"), Reply(label: "延後處理", text: "晚點回你\n我想一下")],
         category: "家庭生活")
 
-    @Test func producesThreeMessagesInOrder() {
+    @Test func producesFourMessagesInOrder() {
         let m = MessageFormatter.format(sample)
+        #expect(m.count == 4)
+        let d = "━━━━━━━━━━"
+        #expect(m[0] == "🧹【精簡逐字稿】\n\(d)\n🏷️ 分類：家庭生活\n\n精簡後的逐字稿")
+        #expect(m[0].contains("🏷️ 分類："))
+        #expect(m[1] == "🎙️【逐字稿】\n\(d)\n潤飾後的逐字稿")
+        #expect(!m[1].contains("分類"))
+        #expect(m[2] == "🌡️【情緒分析】\n\(d)\n整體平靜")
+        #expect(m[3].hasPrefix("🪄【回覆建議】\n\(d)\n1. 【簡短收到】\n好的，我知道了"))
+        #expect(!m.joined().contains("重點整理"))
+    }
+
+    @Test func emptyCleanFallsBackToThreeMessagesWithCategoryOnTranscript() {
+        var a = sample
+        a.clean = " \n"
+        let m = MessageFormatter.format(a)
         #expect(m.count == 3)
         let d = "━━━━━━━━━━"
         #expect(m[0] == "🎙️【逐字稿】\n\(d)\n🏷️ 分類：家庭生活\n\n潤飾後的逐字稿")
-        #expect(m[0].contains("🏷️ 分類："))
-        #expect(m[1] == "🌡️【情緒分析】\n\(d)\n整體平靜")
-        #expect(m[2].hasPrefix("🪄【回覆建議】\n\(d)\n1. 【簡短收到】\n好的，我知道了"))
-        #expect(!m.joined().contains("重點整理"))
+        #expect(!m.joined().contains("精簡逐字稿"))
+        #expect(m[1].hasPrefix("🌡️") && m[2].hasPrefix("🪄"))
+    }
+
+    @Test func truncatesLongClean() {
+        var a = sample
+        a.clean = String(repeating: "中", count: 6000)
+        let m = MessageFormatter.format(a)
+        #expect(m[0].utf16.count <= 5000 && m[0].hasSuffix("…（已截斷）"))
     }
 
     @Test func repliesAreNumberedWithLabels() {
         let m = MessageFormatter.format(sample)
-        #expect(m[2].hasSuffix("1. 【簡短收到】\n好的，我知道了\n\n2. 【延後處理】\n晚點回你\n我想一下"))
+        #expect(m[3].hasSuffix("1. 【簡短收到】\n好的，我知道了\n\n2. 【延後處理】\n晚點回你\n我想一下"))
     }
 
     @Test func emptyFieldsBecomeNone() {
-        let a = Analysis(polished: "", sentiment: "  ", replies: [])
+        let a = Analysis(polished: "", clean: "", sentiment: "  ", replies: [])
         let m = MessageFormatter.format(a)
         #expect(m.count == 3)
         for msg in m {
@@ -36,10 +56,10 @@ import Testing
     @Test func truncatesLongPolishedByUTF16AndKeepsGraphemeIntact() {
         let family = "👨‍👩‍👧"
         let long = String(repeating: family + "中文", count: 6000)
-        let m = MessageFormatter.format(Analysis(polished: long, sentiment: "x", replies: [Reply(label: "l", text: "r")]))
-        #expect(m[0].utf16.count <= 5000)
-        #expect(m[0].hasSuffix("…（已截斷）"))
-        let body = String(m[0].dropLast("…（已截斷）".count))
+        let m = MessageFormatter.format(Analysis(polished: long, clean: "c", sentiment: "x", replies: [Reply(label: "l", text: "r")]))
+        #expect(m[1].utf16.count <= 5000)
+        #expect(m[1].hasSuffix("…（已截斷）"))
+        let body = String(m[1].dropLast("…（已截斷）".count))
         let last = body.last!
         #expect(last == "文" || last == Character(family))
         #expect(!body.hasSuffix("\u{200D}"))

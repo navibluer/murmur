@@ -7,7 +7,7 @@ import Testing
     var url: URL { dir.appendingPathComponent("sub/records.csv") }
 
     func analysis(category: String = "家庭生活", polished: String = "你好") -> Analysis {
-        Analysis(polished: polished, sentiment: "平靜", replies: [Reply(label: "簡短收到", text: "好"), Reply(label: "延後處理", text: "晚點回")], category: category)
+        Analysis(polished: polished, clean: "精簡你好", sentiment: "平靜", replies: [Reply(label: "簡短收到", text: "好"), Reply(label: "延後處理", text: "晚點回")], category: category)
     }
 
     @Test func newFileHasBOMAndHeader() throws {
@@ -16,7 +16,7 @@ import Testing
         let data = try Data(contentsOf: url)
         #expect(Array(data.prefix(3)) == [0xEF, 0xBB, 0xBF])
         let text = String(decoding: data.dropFirst(3), as: UTF8.self)
-        #expect(text.hasPrefix("時間,指紋,分類,逐字稿,情緒分析,回覆建議\r\n"))
+        #expect(text.hasPrefix("時間,指紋,分類,精簡逐字稿,逐字稿,情緒分析,回覆建議\r\n"))
         #expect(text.hasSuffix("\r\n"))
     }
 
@@ -24,6 +24,7 @@ import Testing
         let store = CSVRecordStore(url: url)
         let a = Analysis(
             polished: "他說：\"好\", 然後\n換行\r\n再一行",
+            clean: "精簡, \"版\"\n換行",
             sentiment: "情緒, \"複雜\"",
             replies: [Reply(label: "設立,界線", text: "1. 開頭像編號"), Reply(label: "明確\"拒絕\"", text: "含\n換行,和\"引號\"的回覆")], category: "閒聊問候")
         let r = Record(time: "2026-01-02 03:04", fingerprint: "f1", analysis: a)
@@ -36,6 +37,7 @@ import Testing
         #expect(back.analysis.replies == a.replies)
         // \r\n 在逐字稿內會被保留（解析器以 unicodeScalars 處理）
         #expect(back.analysis.polished == a.polished)
+        #expect(back.analysis.clean == a.clean)
         #expect(try store.find(fingerprint: "nope") == nil)
     }
 
@@ -106,7 +108,7 @@ import Testing
 
     @Test func appendAfterMissingTrailingNewline() throws {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        let row = CSV.encode(["t", "old", "家庭生活", "p", "x", "1. r"])
+        let row = CSV.encode(["t", "old", "家庭生活", "c", "p", "x", "1. r"])
         var data = Data([0xEF, 0xBB, 0xBF])
         data.append(Data((CSV.encode(CSVRecordStore.header) + row.dropLast(2)).utf8))
         try data.write(to: url)
@@ -138,7 +140,7 @@ import Testing
             let data = try Data(contentsOf: url)
             #expect(Array(data.prefix(3)) == [0xEF, 0xBB, 0xBF])
             let text = String(decoding: data.dropFirst(3), as: UTF8.self)
-            #expect(text.hasPrefix("時間,指紋,分類,逐字稿,情緒分析,回覆建議\r\n"))
+            #expect(text.hasPrefix("時間,指紋,分類,精簡逐字稿,逐字稿,情緒分析,回覆建議\r\n"))
             try FileManager.default.removeItem(at: url)
         }
     }
@@ -155,11 +157,11 @@ import Testing
         #expect(back.analysis.sentiment == "+1")
     }
 
-    // MARK: 舊 7 欄格式遷移
+    // MARK: 舊格式（v1 7 欄、v2 6 欄）遷移
 
-    func writeLegacy(_ rows: [[String]]) throws -> Data {
+    func writeLegacy(_ rows: [[String]], header: [String] = CSVRecordStore.headerV1) throws -> Data {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        var s = CSV.encode(CSVRecordStore.legacyHeader)
+        var s = CSV.encode(header)
         for r in rows { s += CSV.encode(r) }
         let data = Data([0xEF, 0xBB, 0xBF]) + Data(s.utf8)
         try data.write(to: url)
@@ -170,6 +172,69 @@ import Testing
         ["2026-01-01 10:00", "old1", "金錢財務", "- 重點, 一", "逐字稿一\n第二行", "情緒, \"複雜\"", "1. 好的\n2. 含\n換行的回覆"],
         ["2026-01-01 10:01", "old2", "家庭生活", "- 重點二", "逐字稿二", "平靜", "1. 晚點回"],
     ]
+
+    let v2Rows = [
+        ["2026-01-01 10:00", "old1", "金錢財務", "逐字稿一\n第二行", "情緒, \"複雜\"", "1. 好的\n2. 含\n換行的回覆"],
+        ["2026-01-01 10:01", "old2", "家庭生活", "逐字稿二", "平靜", "1. 晚點回"],
+    ]
+
+    @Test func v3RoundTripIsNotMistakenForV1() throws {
+        // v1 與 v3 都是 7 欄，必須以表頭區分：v3 檔的第 4 欄是精簡逐字稿，不能被當成重點整理丟掉
+        let store = CSVRecordStore(url: url)
+        try store.append(Record(time: "t", fingerprint: "n", analysis: analysis()))
+        #expect(try store.migrateIfNeeded() == false)
+        #expect(try store.find(fingerprint: "n")?.analysis.clean == "精簡你好")
+        #expect(try store.find(fingerprint: "n")?.analysis.polished == "你好")
+        let files = try FileManager.default.contentsOfDirectory(atPath: url.deletingLastPathComponent().path)
+        #expect(files == ["records.csv"])
+    }
+
+    @Test func v1FileMigratesToV3KeepingAllFieldsWithEmptyClean() throws {
+        let original = try writeLegacy(legacyRows)
+        let store = CSVRecordStore(url: url)
+        #expect(try store.migrateIfNeeded())
+        let bak = url.deletingLastPathComponent().appendingPathComponent("records.csv.bak")
+        #expect(try Data(contentsOf: bak) == original)
+        let text = String(decoding: try Data(contentsOf: url).dropFirst(3), as: UTF8.self)
+        #expect(text.hasPrefix("時間,指紋,分類,精簡逐字稿,逐字稿,情緒分析,回覆建議\r\n"))
+        let rows = try CSV.parse(text)
+        #expect(rows.count == 3 && rows.allSatisfy { $0.count == 7 })
+        #expect(rows[1][3] == "")
+        let o1 = try #require(try store.find(fingerprint: "old1"))
+        #expect(o1.analysis.clean == "" && o1.analysis.polished == "逐字稿一\n第二行" && o1.analysis.category == "金錢財務")
+        #expect(o1.analysis.sentiment == "情緒, \"複雜\"" && o1.analysis.replies.map(\.text) == ["好的", "含\n換行的回覆"])
+        #expect(try store.migrateIfNeeded() == false)
+    }
+
+    @Test func v2FileMigratesToV3KeepingAllFieldsWithEmptyClean() throws {
+        let original = try writeLegacy(v2Rows, header: CSVRecordStore.headerV2)
+        let store = CSVRecordStore(url: url)
+        // 遷移前也能讀
+        #expect(try store.find(fingerprint: "old2")?.analysis.polished == "逐字稿二")
+        #expect(try store.migrateIfNeeded())
+        let bak = url.deletingLastPathComponent().appendingPathComponent("records.csv.bak")
+        #expect(try Data(contentsOf: bak) == original)
+        let text = String(decoding: try Data(contentsOf: url).dropFirst(3), as: UTF8.self)
+        #expect(text.hasPrefix("時間,指紋,分類,精簡逐字稿,逐字稿,情緒分析,回覆建議\r\n"))
+        let rows = try CSV.parse(text)
+        #expect(rows.count == 3 && rows.allSatisfy { $0.count == 7 })
+        let o1 = try #require(try store.find(fingerprint: "old1"))
+        #expect(o1.analysis.clean == "" && o1.analysis.polished == "逐字稿一\n第二行" && o1.analysis.category == "金錢財務")
+        #expect(o1.analysis.sentiment == "情緒, \"複雜\"" && o1.analysis.replies.map(\.text) == ["好的", "含\n換行的回覆"])
+        #expect(try store.find(fingerprint: "old2")?.time == "2026-01-01 10:01")
+    }
+
+    @Test func appendMigratesV2FileWithBackup() throws {
+        let original = try writeLegacy(v2Rows, header: CSVRecordStore.headerV2)
+        let store = CSVRecordStore(url: url)
+        try store.append(Record(time: "2026-02-02 02:02", fingerprint: "new1", analysis: analysis()))
+        let bak = url.deletingLastPathComponent().appendingPathComponent("records.csv.bak")
+        #expect(try Data(contentsOf: bak) == original)
+        let rows = try CSV.parse(String(decoding: try Data(contentsOf: url).dropFirst(3), as: UTF8.self))
+        #expect(rows.count == 4 && rows.allSatisfy { $0.count == 7 })
+        #expect(try store.find(fingerprint: "old1")?.analysis.clean == "")
+        #expect(try store.find(fingerprint: "new1")?.analysis.clean == "精簡你好")
+    }
 
     @Test func legacyRowsReadWithEmptyLabels() throws {
         _ = try writeLegacy(legacyRows)
@@ -187,7 +252,7 @@ import Testing
         let bak = url.deletingLastPathComponent().appendingPathComponent("records.csv.bak")
         #expect(try Data(contentsOf: bak) == original)
         let text = String(decoding: try Data(contentsOf: url).dropFirst(3), as: UTF8.self)
-        #expect(text.hasPrefix("時間,指紋,分類,逐字稿,情緒分析,回覆建議\r\n"))
+        #expect(text.hasPrefix("時間,指紋,分類,精簡逐字稿,逐字稿,情緒分析,回覆建議\r\n"))
         #expect(try store.find(fingerprint: "old1")?.analysis.polished == "逐字稿一\n第二行")
         #expect(try store.find(fingerprint: "old2") != nil)
         #expect(try store.migrateIfNeeded() == false)  // 已是新格式，不再動
@@ -203,9 +268,9 @@ import Testing
         let data = try Data(contentsOf: url)
         #expect(Array(data.prefix(3)) == [0xEF, 0xBB, 0xBF])
         let text = String(decoding: data.dropFirst(3), as: UTF8.self)
-        #expect(text.hasPrefix("時間,指紋,分類,逐字稿,情緒分析,回覆建議\r\n"))
+        #expect(text.hasPrefix("時間,指紋,分類,精簡逐字稿,逐字稿,情緒分析,回覆建議\r\n"))
         let rows = try CSV.parse(text)
-        #expect(rows.count == 4 && rows.allSatisfy { $0.count == 6 })
+        #expect(rows.count == 4 && rows.allSatisfy { $0.count == 7 })
         let o1 = try #require(try store.find(fingerprint: "old1"))
         #expect(o1.time == "2026-01-01 10:00" && o1.analysis.category == "金錢財務")
         #expect(o1.analysis.polished == "逐字稿一\n第二行" && o1.analysis.sentiment == "情緒, \"複雜\"")

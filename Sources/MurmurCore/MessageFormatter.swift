@@ -5,6 +5,7 @@ public enum MessageFormatter {
     static let suffix = "…（已截斷）"
     static let none = "（無）"
     static let divider = "━━━━━━━━━━"
+    static let cleanHeader = "🧹【精簡逐字稿】"
     static let transcriptHeader = "🎙️【逐字稿】"
     static let sentimentHeader = "🌡️【情緒分析】"
     static let repliesHeader = "🪄【回覆建議】"
@@ -24,11 +25,19 @@ public enum MessageFormatter {
                 r.label.isEmpty ? "\(i + 1). \(r.text)" : "\(i + 1). 【\(r.label)】\n\(r.text)"
             }.joined(separator: "\n\n")
         }
-        return [
-            truncate(header(transcriptHeader) + "🏷️ 分類：\(orNone(a.category))\n\n" + orNone(a.polished)),
+        let category = "🏷️ 分類：\(orNone(a.category))\n\n"
+        let sentimentAndReplies = [
             truncate(header(sentimentHeader) + orNone(a.sentiment)),
             truncate(header(repliesHeader) + replies),
         ]
+        // clean 為空（舊紀錄沿用）：省略精簡版，分類放回逐字稿那則
+        if a.clean.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return [truncate(header(transcriptHeader) + category + orNone(a.polished))] + sentimentAndReplies
+        }
+        return [
+            truncate(header(cleanHeader) + category + orNone(a.clean)),
+            truncate(header(transcriptHeader) + orNone(a.polished)),
+        ] + sentimentAndReplies
     }
 
     static func orNone(_ s: String) -> String {

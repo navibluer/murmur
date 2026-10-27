@@ -49,12 +49,13 @@ final class StubProtocol: URLProtocol, @unchecked Sendable {
     @Test func unescapesLiteralBackslashSequences() async throws {
         StubProtocol.handler = { _, _ in
             (200, self.toolUseResponse([
-                "polished": "第一段\\n\\n第二段", "sentiment": "好\\t棒\\n真的",
+                "polished": "第一段\\n\\n第二段", "clean": "精簡\\n段", "sentiment": "好\\t棒\\n真的",
                 "replies": [["label": "簡短收到", "text": "行一\\n行二"], ["label": "延後處理", "text": "之後再說"]], "category": "家庭生活",
             ]))
         }
         let a = try await makeAnalyzer().analyze(transcript: "原文", categories: ["家庭生活"])
         #expect(a.polished == "第一段\n\n第二段")
+        #expect(a.clean == "精簡\n段")
         #expect(a.sentiment == "好\t棒\n真的")
         #expect(a.replies.first == Reply(label: "簡短收到", text: "行一\n行二"))
         for f in [a.polished, a.sentiment, a.replies[0].label, a.replies[0].text] { #expect(!f.contains("\\")) }
@@ -63,7 +64,7 @@ final class StubProtocol: URLProtocol, @unchecked Sendable {
     @Test func sendsExpectedRequestAndParsesAndConvertsToTraditional() async throws {
         StubProtocol.handler = { _, _ in
             (200, self.toolUseResponse([
-                "polished": "这是简体中文的逐字稿", "sentiment": "心情很好",
+                "polished": "这是简体中文的逐字稿", "clean": "这是简体精简稿", "sentiment": "心情很好",
                 "replies": [["label": "简短收到", "text": "好的，没问题"], ["label": "延后处理", "text": "晚点联系"]], "category": " 家庭关系 ",
             ]))
         }
@@ -82,6 +83,7 @@ final class StubProtocol: URLProtocol, @unchecked Sendable {
         #expect(tools[0]["name"] as? String == "submit_analysis")
         #expect(tools[0]["strict"] as? Bool == true)
         #expect(a.polished == "這是簡體中文的逐字稿")
+        #expect(a.clean == "這是簡體精簡稿")
         #expect(a.replies.count == 2)
         #expect(a.replies[0] == Reply(label: "簡短收到", text: "好的，沒問題"))
         #expect(a.replies[1].label == "延後處理")
@@ -129,7 +131,7 @@ final class StubProtocol: URLProtocol, @unchecked Sendable {
     @Test func workspaceHeaderSentOnlyWhenSet() async throws {
         let cfg = URLSessionConfiguration.ephemeral
         cfg.protocolClasses = [StubProtocol.self]
-        let ok = toolUseResponse(["polished": "a", "sentiment": "c", "replies": Self.goodReplies, "category": "c"])
+        let ok = toolUseResponse(["polished": "a", "clean": "b", "sentiment": "c", "replies": Self.goodReplies, "category": "c"])
         StubProtocol.handler = { _, _ in (200, ok) }
         _ = try await ClaudeAnalyzer(apiKey: "k", model: "m", session: URLSession(configuration: cfg), workspaceID: "ws_123").analyze(transcript: "x", categories: ["家庭生活"])
         #expect(StubProtocol.lastRequest?.value(forHTTPHeaderField: "anthropic-workspace-id") == "ws_123")
@@ -138,10 +140,10 @@ final class StubProtocol: URLProtocol, @unchecked Sendable {
     }
 
     func good(_ tag: String = "") -> [String: Any] {
-        ["polished": "潤飾\(tag)", "sentiment": "平穩", "replies": Self.goodReplies, "category": "家庭生活"]
+        ["polished": "潤飾\(tag)", "clean": "精簡\(tag)", "sentiment": "平穩", "replies": Self.goodReplies, "category": "家庭生活"]
     }
     static var goodReplies: [[String: Any]] { [["label": "簡短收到", "text": "好的"], ["label": "延後處理", "text": "我想一下"]] }
-    var bad: [String: Any] { ["polished": "placeholder", "sentiment": "placeholder", "replies": [], "category": "placeholder"] }
+    var bad: [String: Any] { ["polished": "placeholder", "clean": "placeholder", "sentiment": "placeholder", "replies": [], "category": "placeholder"] }
 
     final class Counter: @unchecked Sendable { nonisolated(unsafe) var n = 0 }
 
@@ -157,7 +159,7 @@ final class StubProtocol: URLProtocol, @unchecked Sendable {
     @Test func picksFirstValidToolUseInSameResponse() async throws {
         let c = Counter()
         let obj: [String: Any] = ["stop_reason": "tool_use", "content": [
-            ["type": "tool_use", "id": "1", "name": "submit_analysis", "input": ["polished": "p", "sentiment": "", "replies": Self.goodReplies, "category": "c"]],
+            ["type": "tool_use", "id": "1", "name": "submit_analysis", "input": ["polished": "p", "clean": "q", "sentiment": "", "replies": Self.goodReplies, "category": "c"]],
             ["type": "tool_use", "id": "2", "name": "submit_analysis", "input": good("二")],
         ]]
         let data = try JSONSerialization.data(withJSONObject: obj)
@@ -178,10 +180,14 @@ final class StubProtocol: URLProtocol, @unchecked Sendable {
     }
 
     @Test func isValidBoundaries() {
-        let ok = Analysis(polished: "a", sentiment: "c", replies: [Reply(label: "簡短收到", text: "d"), Reply(label: "設立界線", text: "e")], category: "e")
+        let ok = Analysis(polished: "a", clean: "b", sentiment: "c", replies: [Reply(label: "簡短收到", text: "d"), Reply(label: "設立界線", text: "e")], category: "e")
         #expect(ClaudeAnalyzer.isValid(ok))
         var x = ok; x.sentiment = "  \n "; #expect(!ClaudeAnalyzer.isValid(x))
         x = ok; x.polished = "Placeholder"; #expect(!ClaudeAnalyzer.isValid(x))
+        x = ok; x.clean = ""; #expect(!ClaudeAnalyzer.isValid(x))
+        x = ok; x.clean = " \n"; #expect(!ClaudeAnalyzer.isValid(x))
+        x = ok; x.clean = "Placeholder"; #expect(!ClaudeAnalyzer.isValid(x))
+        x = ok; x.clean = "TODO"; #expect(!ClaudeAnalyzer.isValid(x))
         x = ok; x.sentiment = "這是 PlaceHolder 文字"; #expect(!ClaudeAnalyzer.isValid(x))
         x = ok; x.category = "TBD"; #expect(!ClaudeAnalyzer.isValid(x))
         x = ok; x.category = " n/a "; #expect(!ClaudeAnalyzer.isValid(x))
@@ -206,7 +212,16 @@ final class StubProtocol: URLProtocol, @unchecked Sendable {
         #expect(!system.contains("summary"))
         let tool = try #require((obj["tools"] as? [[String: Any]])?.first)
         let schema = try #require(tool["input_schema"] as? [String: Any])
-        #expect((schema["required"] as? [String]) == ["polished", "sentiment", "replies", "category"])
+        #expect((schema["required"] as? [String]) == ["polished", "clean", "sentiment", "replies", "category"])
+        let props = try #require(schema["properties"] as? [String: Any])
+        let cleanProp = try #require(props["clean"] as? [String: Any])
+        #expect(cleanProp["type"] as? String == "string")
+        #expect(cleanProp["description"] as? String == "精簡逐字稿：保留所有事實與訴求，去除重複與情緒渲染，改為中性敘述")
+        #expect(schema["additionalProperties"] as? Bool == false)
+        #expect(tool["strict"] as? Bool == true)
+        #expect(system.contains("- clean：精簡逐字稿"))
+        #expect(system.contains("不得出現簡體字。也不要夾雜英文單字（專有名詞除外）。"))
+        #expect(system.contains("事實、訴求、問題、數字、日期與時間一個都不能漏"))
         let replies = try #require((schema["properties"] as? [String: Any])?["replies"] as? [String: Any])
         let items = try #require(replies["items"] as? [String: Any])
         #expect(items["type"] as? String == "object")

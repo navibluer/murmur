@@ -15,12 +15,14 @@ public struct Reply: Codable, Equatable, Sendable {
 
 public struct Analysis: Codable, Equatable, Sendable {
     public var polished: String
+    public var clean: String
     public var sentiment: String
     public var replies: [Reply]
     public var category: String
 
-    public init(polished: String, sentiment: String, replies: [Reply], category: String = "") {
+    public init(polished: String, clean: String = "", sentiment: String, replies: [Reply], category: String = "") {
         self.polished = polished
+        self.clean = clean
         self.sentiment = sentiment
         self.replies = replies
         self.category = category
@@ -58,11 +60,12 @@ public struct ClaudeAnalyzer: Analyzer {
 
     static let systemPrompt = """
         你是語音訊息分析助手。使用者會提供一段語音轉出的逐字稿（可能有同音錯字、缺標點、口語贅詞）。\
-        請呼叫 submit_analysis 工具提交結果，所有欄位一律使用繁體中文（台灣用語），不得出現簡體字。\
+        請呼叫 submit_analysis 工具提交結果，所有欄位一律使用繁體中文（台灣用語），不得出現簡體字。也不要夾雜英文單字（專有名詞除外）。\
         所有欄位需要換行時請直接輸出真正的換行字元，不要輸出跳脫序列（例如反斜線加 n）。
 
         【欄位定義】
         - polished：潤飾後的逐字稿。修正同音錯字與辨識錯誤、補上標點、分段、去除口語贅詞，但不改變原意、不增刪內容。
+        - clean：精簡逐字稿。說話者提到的事實、訴求、問題、數字、日期與時間一個都不能漏；反覆說的話只保留一次；哭訴、哀求、指責、誇張或情緒性的語氣改寫成中性、平靜的敘述；維持說話者的第一人稱；不加入原文沒有的內容，也不加評論。
         - sentiment：情緒分析，包含說話者的情緒與語氣、實際的訴求，以及收訊者需要注意的地方。簡潔、具體。
         - replies：3 則回覆建議，每則是一個物件 { label, text }：
           - label：這則回覆的策略，4～6 個字，例如「簡短收到」「設立界線」「延後處理」「明確拒絕」「表達關心」。3 則必須是不同策略。
@@ -87,6 +90,7 @@ public struct ClaudeAnalyzer: Analyzer {
             "type": "object",
             "properties": [
                 "polished": ["type": "string", "description": "潤飾後的逐字稿（繁體中文）；換行請用真正的換行字元，不要輸出跳脫序列"],
+                "clean": ["type": "string", "description": "精簡逐字稿：保留所有事實與訴求，去除重複與情緒渲染，改為中性敘述"],
                 "sentiment": ["type": "string", "description": "情緒分析（繁體中文）；換行請用真正的換行字元，不要輸出跳脫序列"],
                 "replies": [
                     "type": "array",
@@ -103,7 +107,7 @@ public struct ClaudeAnalyzer: Analyzer {
                 ] as [String: Any],
                 "category": ["type": "string", "description": "內容分類（繁體中文，2～6 個字）；優先使用現有分類，都不適合時自訂"],
             ],
-            "required": ["polished", "sentiment", "replies", "category"],
+            "required": ["polished", "clean", "sentiment", "replies", "category"],
             "additionalProperties": false,
         ] as [String: Any],
     ] }
@@ -156,6 +160,7 @@ public struct ClaudeAnalyzer: Analyzer {
         for block in blocks {
             guard let input = block["input"] as? [String: Any],
                 let polished = input["polished"] as? String,
+                let cleanText = input["clean"] as? String,
                 let sentiment = input["sentiment"] as? String,
                 let rawReplies = input["replies"] as? [[String: Any]],
                 let category = input["category"] as? String
@@ -166,7 +171,7 @@ public struct ClaudeAnalyzer: Analyzer {
                 replies.append(Reply(label: clean(label), text: clean(text)))
             }
             let a = Analysis(
-                polished: clean(polished),
+                polished: clean(polished), clean: clean(cleanText),
                 sentiment: clean(sentiment), replies: replies,
                 category: clean(category).trimmingCharacters(in: .whitespacesAndNewlines))
             if Self.isValid(a) { return a }
@@ -181,7 +186,7 @@ public struct ClaudeAnalyzer: Analyzer {
             if t.isEmpty || t.contains("placeholder") { return false }
             return !["todo", "tbd", "n/a"].contains(t)
         }
-        return [a.polished, a.sentiment, a.category].allSatisfy(ok)
+        return [a.polished, a.clean, a.sentiment, a.category].allSatisfy(ok)
             && (2...4).contains(a.replies.count)
             && a.replies.allSatisfy { ok($0.label) && ok($0.text) }
     }
